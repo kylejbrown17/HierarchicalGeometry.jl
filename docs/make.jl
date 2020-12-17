@@ -1,14 +1,14 @@
-using PolyhedralOverapproximation
+using HierarchicalGeometry
 using Documenter
 
 makedocs(;
-    modules=[PolyhedralOverapproximation],
+    modules=[HierarchicalGeometry],
     authors="kylebrown <kylejbrown17@gmail.com> and contributors",
-    repo="https://github.com/kylejbrown17/PolyhedralOverapproximation.jl/blob/{commit}{path}#L{line}",
-    sitename="PolyhedralOverapproximation.jl",
+    repo="https://github.com/kylejbrown17/HierarchicalGeometry.jl/blob/{commit}{path}#L{line}",
+    sitename="HierarchicalGeometry.jl",
     format=Documenter.HTML(;
         prettyurls=get(ENV, "CI", "false") == "true",
-        canonical="https://kylejbrown17.github.io/PolyhedralOverapproximation.jl",
+        canonical="https://kylejbrown17.github.io/HierarchicalGeometry.jl",
         assets=String[],
     ),
     pages=[
@@ -17,5 +17,5 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/kylejbrown17/PolyhedralOverapproximation.jl",
+    repo="github.com/kylejbrown17/HierarchicalGeometry.jl",
 )

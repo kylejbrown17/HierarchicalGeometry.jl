@@ -1,12 +1,12 @@
 ```@meta
-CurrentModule = PolyhedralOverapproximation
+CurrentModule = HierarchicalGeometry
 ```
 
-# PolyhedralOverapproximation
+# HierarchicalGeometry
 
 ```@index
 ```
 
 ```@autodocs
-Modules = [PolyhedralOverapproximation]
+Modules = [HierarchicalGeometry]
 ```

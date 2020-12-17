@@ -1,7 +1,7 @@
 using Polyhedra
 using LazySets
 using MeshCat
-using PolyhedralOverapproximation
+using HierarchicalGeometry
 
 vis = Visualizer()
 render(vis)
@@ -16,8 +16,8 @@ vpoly = tovrep(hpoly)
 poly = Polyhedra.polyhedron(hpoly)
 
 # model = RegularPolyhedronOverapprox(3,8)
-model = PolyhedralOverapproximation.equatorial_overapprox_model()
-# model = PolyhedralOverapproximation.equatorial_overapprox_model([0.0],0.0:π/2:2π)
+model = HierarchicalGeometry.equatorial_overapprox_model()
+# model = HierarchicalGeometry.equatorial_overapprox_model([0.0],0.0:π/2:2π)
 hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 

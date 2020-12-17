@@ -1,6 +1,6 @@
-using PolyhedralOverapproximation
+using HierarchicalGeometry
 using Test
 
-@testset "PolyhedralOverapproximation.jl" begin
+@testset "HierarchicalGeometry.jl" begin
     # Write your tests here.
 end

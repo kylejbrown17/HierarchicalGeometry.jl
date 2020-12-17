@@ -1,4 +1,4 @@
-module PolyhedralOverapproximation
+module HierarchicalGeometry
 
 # Write your package code here.
 using StaticArrays
