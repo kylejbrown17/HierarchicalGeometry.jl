@@ -71,12 +71,47 @@ function RegularPolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
     RegularPolyhedronOverapprox(tuple(vecs...))
 end
 
+export
+    equatorial_overrapprox_model
+
+"""
+    equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=collect(0:π/4:2π),epsilon=0.1)
+
+Returns a RegularPolyhedronOverapprox model generated with one face for each
+combination of pitch and yaw angles specified by lat_angles and lon_angles,
+respectively. There are also two faces at the two poles
+"""
+function equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=collect(0:π/4:2π),epsilon=0.1)
+    vecs = Vector{SVector{3,Float64}}()
+    push!(vecs,[0.0,0.0,1.0])
+    push!(vecs,[0.0,0.0,-1.0])
+    for phi in lat_angles
+        for theta in lon_angles
+            v = normalize([
+                cos(phi)*cos(theta),
+                cos(phi)*sin(theta),
+                sin(phi)
+            ])
+            add = true
+            for vp in vecs
+                if norm(v-vp) < epsilon
+                    add = false
+                    break
+                end
+            end
+            if add
+                push!(vecs,v)
+            end
+        end
+    end
+    RegularPolyhedronOverapprox(tuple(vecs...))
+end
 
 function LazySets.overapproximate(lazy_set,model::RegularPolyhedronOverapprox{N},epsilon::Float64=0.1) where {D,N}
     halfspaces = map(v->LazySets.HalfSpace(v,ρ(v,lazy_set)),get_support_vecs(model))
     sort!(halfspaces; by=h->ρ(h.a, lazy_set))
     poly = HPolyhedron()
-    while !isempty(halfspaces) && !isbounded(poly)
+    while !isempty(halfspaces) #&& !isbounded(poly)
         poly = intersection(poly,halfspaces[1])
         deleteat!(halfspaces,1)
     end
@@ -86,9 +121,9 @@ function LazySets.overapproximate(lazy_set,model::RegularPolyhedronOverapprox{N}
     # continue adding new halfspace constraints until the distance "clipped off"
     # by the new halfspace constraint is less than epsilon
     # while !isempty(halfspaces)
-        for v in vertices_list(hpoly)
-
-        end
+    #     for v in vertices_list(hpoly)
+    #
+    #     end
     # end
     hpoly
 end
