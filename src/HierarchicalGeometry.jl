@@ -1,11 +1,10 @@
 module HierarchicalGeometry
 
-# Write your package code here.
 using StaticArrays
 using LinearAlgebra
 using Polyhedra
 using LazySets
-# using QHull
+using GeometryTypes
 
 """
     cross_product_operator(x)
@@ -18,24 +17,98 @@ cross_product_operator(x) = SMatrix{3,3}(
      -x[2]  x[1]    0.0]
 )
 
+"""
+    GeometryHierarchy
+
+A hierarchical representation of geometry
+Fields:
+* graph - encodes the hierarchy of geometries
+* geoms -
+"""
+# struct GeometryHierarchy
+#
+# end
+export
+    GridDiscretization,
+    GridOccupancy,
+    has_overlap
+
+struct GridDiscretization{N,T}
+    origin::SVector{N,T}
+    discretization::SVector{N,T}
+end
+get_hyperrectangle(m::GridDiscretization,idxs) = Hyperrectangle(m.origin .+ idxs.*m.discretization, m.discretization/2)
+"""
+    cell_indices(m::GridDiscretization,v)
+
+get indices of cell of `m` in which `v` falls
+"""
+cell_indices(m::GridDiscretization,v) = SVector(ceil.(Int,(v .- m.origin .- m.discretization/2)./m.discretization)...)
+struct GridOccupancy{N,T,A<:AbstractArray{Bool,N}}
+    grid::GridDiscretization{N,T}
+    occupancy::A
+    offset::SVector{N,Int}
+end
+GridOccupancy(m::GridDiscretization{N,T},o::AbstractArray) where {N,T} = GridOccupancy(m,o,SVector(zeros(Int,N)...))
+Base.:(+)(o::GridOccupancy,v) = GridOccupancy(o.grid,o.occupancy,o.offset+v)
+Base.:(-)(o::GridOccupancy,v) = o+(-v)
+get_hyperrectangle(m::GridOccupancy,idxs) = get_hyperrectangle(m.grid,idxs .+ m.offset)
+function Base.intersect(o1::G,o2::G) where {G<:GridOccupancy}
+    offset = o2.offset - o1.offset
+    starts = max.(1,offset .+ 1)
+    stops = min.(SVector(size(o1.occupancy)),size(o2.occupancy) .+ offset)
+    idxs = CartesianIndex(starts...):CartesianIndex(stops...)
+    overlap = o1.occupancy[idxs] .* o2.occupancy[idxs .- CartesianIndex(offset...)]
+    G(o1.grid,overlap,o2.offset)
+end
+has_overlap(o1::G,o2::G) where {G<:GridOccupancy} = any(intersect(o1,o2).occupancy)
+LazySets.is_intersection_empty(o1::G,o2::G) where {G<:GridOccupancy} = !has_overlap(o1,o2)
+function LazySets.overapproximate(o::GridOccupancy,::Type{Hyperrectangle})
+    origin = o.grid.origin
+    start = findnext(o.occupancy,CartesianIndex(ones(Int,size(origin))...))
+    finish = findprev(o.occupancy,CartesianIndex(size(o.occupancy)...))
+    @show start, finish
+    starts = origin .+ (start.I .- 1.5) .* o.grid.discretization
+    stops = origin .+ (finish.I .- 0.5) .* o.grid.discretization
+    @show starts, stops
+    center = (starts .+ stops) / 2
+    radii = (stops .- starts) / 2
+    Hyperrectangle(center,radii)
+end
+function LazySets.overapproximate(lazy_set,grid::GridDiscretization)
+    rect = overapproximate(lazy_set,Hyperrectangle)
+    starts = center(rect) .- radius_hyperrectangle(rect)
+    stops = center(rect) .+ radius_hyperrectangle(rect)
+    @show start_idxs = cell_indices(grid,starts)
+    @show stop_idxs = cell_indices(grid,stops)
+    @show offset = SVector(start_idxs...) .- 1
+    occupancy = falses((stop_idxs .- offset)...)
+    approx = GridOccupancy(grid,occupancy,offset)
+    for idx in CartesianIndices(occupancy)
+        r = get_hyperrectangle(approx,[idx.I...])
+        if !is_intersection_empty(lazy_set,r)
+            approx.occupancy[idx] = true
+        end
+    end
+    GridOccupancy(grid,occupancy,offset)
+end
+
 abstract type OverapproxModel end
 
-export
-    RegularPolyhedronOverapprox
-
+export PolyhedronOverapprox
 """
-    RegularPolyhedronOverapprox{D,N}
+    PolyhedronOverapprox{D,N}
 
 Used to overrapproximate convex sets with a pre-determined set of support
 vectors.
 """
-struct RegularPolyhedronOverapprox{D,N} <: OverapproxModel
+struct PolyhedronOverapprox{D,N} <: OverapproxModel
     support_vectors::NTuple{N,SVector{D,Float64}}
 end
-get_support_vecs(model::RegularPolyhedronOverapprox) = [v for v in model.support_vectors]
+get_support_vecs(model::PolyhedronOverapprox) = [v for v in model.support_vectors]
 
 """
-    RegularPolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
+    PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
 
 Construct a regular polyhedron overapproximation model by specifying the number
 of dimensions and the number of support vectors to be arranged radially about
@@ -43,7 +116,7 @@ the axis formed by the unit vector along each dimension.
 epsilon if the distance between support vector v and an existing support vector
 is less than epsilon, the new vector will not be added.
 """
-function RegularPolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
+function PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
     vecs = Vector{SVector{dim,Float64}}()
     # v - the initial support vector for a given dimension
     v = zeros(dim)
@@ -68,16 +141,14 @@ function RegularPolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
         end
         v = d
     end
-    RegularPolyhedronOverapprox(tuple(vecs...))
+    PolyhedronOverapprox(tuple(vecs...))
 end
 
-export
-    equatorial_overrapprox_model
-
+export equatorial_overapprox_model
 """
     equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=collect(0:π/4:2π),epsilon=0.1)
 
-Returns a RegularPolyhedronOverapprox model generated with one face for each
+Returns a PolyhedronOverapprox model generated with one face for each
 combination of pitch and yaw angles specified by lat_angles and lon_angles,
 respectively. There are also two faces at the two poles
 """
@@ -104,10 +175,10 @@ function equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=coll
             end
         end
     end
-    RegularPolyhedronOverapprox(tuple(vecs...))
+    PolyhedronOverapprox(tuple(vecs...))
 end
 
-function LazySets.overapproximate(lazy_set,model::RegularPolyhedronOverapprox{N},epsilon::Float64=0.1) where {D,N}
+function LazySets.overapproximate(lazy_set,model::PolyhedronOverapprox{N},epsilon::Float64=0.1) where {D,N}
     halfspaces = map(v->LazySets.HalfSpace(v,ρ(v,lazy_set)),get_support_vecs(model))
     sort!(halfspaces; by=h->ρ(h.a, lazy_set))
     poly = HPolyhedron()
@@ -127,6 +198,16 @@ function LazySets.overapproximate(lazy_set,model::RegularPolyhedronOverapprox{N}
     # end
     hpoly
 end
+
+function LazySets.overapproximate(lazy_set::Polyhedron,sphere::H) where {H<:HyperSphere}
+    r = maximum(map(v->norm(v-origin(sphere)), points(vrep(lazy_set))))
+    HyperSphere(origin(sphere),r)
+end
+# function LazySets.overapproximate(lazy_set::Polyhedron,rect::H) where {H<:HyperRectangle}
+#     r_p = maximum(points(vrep(lazy_set)))
+#     r_n = minimum(points(vrep(lazy_set)))
+#     HyperSphere(origin(sphere),r)
+# end
 
 # """
 #     sort_facet_vtxs

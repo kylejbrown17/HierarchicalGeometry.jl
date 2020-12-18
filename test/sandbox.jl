@@ -2,6 +2,7 @@ using Polyhedra
 using LazySets
 using MeshCat
 using HierarchicalGeometry
+using GeometryTypes
 
 vis = Visualizer()
 render(vis)
@@ -12,14 +13,20 @@ lazy_set = UnionSet(ball,ball2)
 
 bbox = overapproximate(ball)
 hpoly = convert(LazySets.HPolytope,bbox)
+overapproximate(hpoly,Hyperrectangle)
+overapproximate(hpoly,LazySets.BallInf)
 vpoly = tovrep(hpoly)
 poly = Polyhedra.polyhedron(hpoly)
 
-# model = RegularPolyhedronOverapprox(3,8)
+translated_hpoly = LazySets.Translation(hpoly,[1.0,1.0,1.0])
+
+
+# model = PolyhedronOverapprox(3,8)
 model = HierarchicalGeometry.equatorial_overapprox_model()
 # model = HierarchicalGeometry.equatorial_overapprox_model([0.0],0.0:π/2:2π)
 hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 
 setobject!(vis, Polyhedra.Mesh(poly))
-# open(vis)
+
+MeshCat.delete!(vis)
