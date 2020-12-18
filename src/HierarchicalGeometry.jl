@@ -50,7 +50,7 @@ struct GridOccupancy{N,T,A<:AbstractArray{Bool,N}}
     offset::SVector{N,Int}
 end
 GridOccupancy(m::GridDiscretization{N,T},o::AbstractArray) where {N,T} = GridOccupancy(m,o,SVector(zeros(Int,N)...))
-Base.:(+)(o::GridOccupancy,v) = GridOccupancy(o.grid,o.occupancy,o.offset+v)
+Base.:(+)(o::GridOccupancy,v) = GridOccupancy(o.grid,o.occupancy,SVector(o.offset.+v...))
 Base.:(-)(o::GridOccupancy,v) = o+(-v)
 get_hyperrectangle(m::GridOccupancy,idxs) = get_hyperrectangle(m.grid,idxs .+ m.offset)
 function Base.intersect(o1::G,o2::G) where {G<:GridOccupancy}
@@ -67,12 +67,10 @@ function LazySets.overapproximate(o::GridOccupancy,::Type{Hyperrectangle})
     origin = o.grid.origin
     start = findnext(o.occupancy,CartesianIndex(ones(Int,size(origin))...))
     finish = findprev(o.occupancy,CartesianIndex(size(o.occupancy)...))
-    @show start, finish
-    starts = origin .+ (start.I .- 1.5) .* o.grid.discretization
-    stops = origin .+ (finish.I .- 0.5) .* o.grid.discretization
-    @show starts, stops
-    center = (starts .+ stops) / 2
-    radii = (stops .- starts) / 2
+    s = get_hyperrectangle(o,start.I .- 1)
+    f = get_hyperrectangle(o,finish.I .- 1)
+    center = (s.center .+ f.center) / 2
+    radii = (f.center .- s.center .+ o.grid.discretization) / 2
     Hyperrectangle(center,radii)
 end
 function LazySets.overapproximate(lazy_set,grid::GridDiscretization)

@@ -22,9 +22,6 @@ let
     @test HierarchicalGeometry.cell_indices(m,[1.0,0.0,0.0]) == [1,0,0]
     @test HierarchicalGeometry.cell_indices(m,[-1.0,0.0,0.0]) == [-1,0,0]
 
-    # ball = LazySets.Ball2(zeros(3),4.0)
-    # ball2 = LazySets.Ball2([1.0,0.0,0.0],1.0)
-    # lazy_set = UnionSet(ball,ball2)
     geom = LazySets.Ball2(zeros(3),4.0)
     hpoly = overapproximate(geom,equatorial_overapprox_model())
     occupancy = overapproximate(hpoly,m)
