@@ -31,7 +31,5 @@ let
 
     @test !is_intersection_empty(occupancy,occupancy+2)
     @test is_intersection_empty(occupancy,occupancy+8)
-    occupancy+6
-    intersect(occupancy,occupancy+5)
 
 end
