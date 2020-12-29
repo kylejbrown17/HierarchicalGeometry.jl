@@ -4,6 +4,7 @@ authors = ["kylebrown <kylejbrown17@gmail.com> and contributors"]
 version = "0.1.0"
 
 [deps]
+CoordinateTransformations = "150eb455-5306-5404-9cee-2592286d6298"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 GraphUtils = "5d4bc1c0-0fb7-11e9-3252-b1aa07358cab"
 LazySets = "b4f0291d-fe17-52bc-9479-3d1a343d9043"

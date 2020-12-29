@@ -5,6 +5,7 @@ using LinearAlgebra
 using Polyhedra
 using LazySets
 using GeometryBasics
+using CoordinateTransformations
 using LightGraphs, GraphUtils
 using Parameters
 
@@ -24,6 +25,13 @@ struct GeomNode{G}
     # id::Symbol
     geom::G
 end
+LazySets.translate(n::GeomNode,args...) = GeomNode(LazySets.translate(n.geom))
+function LazySets.translate!(n::GeomNode,args...)
+    LazySets.translate!(n.geom)
+    return n
+end
+(t::CoordinateTransformations.Translation)(n::GeomNode) = LazySets.translate(t.translation.data)
+
 
 export GeometryHierarchy
 """
@@ -41,13 +49,14 @@ Fields:
     vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
 end
 
+export GeometryCollection
 """
-    GeometryCollection
+    GeometryCollection{G}
 
 Stores a collection of geometries
 """
-struct GeometryCollection
-    geoms::Vector{GeometryHierarchy}
+struct GeometryCollection{G}
+    geoms::Vector{G}
 end
 
 export
@@ -243,9 +252,10 @@ function LazySets.distance(a::Hyperrectangle,b::Hyperrectangle,p::Real=2.0)
 end
 distance_lower_bound(a::BallType,b::BallType) = LazySets.distance(a,b)
 distance_lower_bound(a::Hyperrectangle,b::Hyperrectangle) = LazySets.distance(a,b)
-distance_lower_bound(a::GeomNode{G},b::GeomNode{H}) where {G<:Union{BallType,RectType},H<:Union{BallType,RectType}} = distance_lower_bound(a.geom,b.geom)
+distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(a.geom,b.geom)
 distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
 distance_lower_bound(a::GeometryCollection,b::GeometryCollection) = minimum(distance_lower_bound(x,y) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
+LazySets.distance(a::GeometryCollection,b::GeometryCollection,p::Real=2.0) = minimum(LazySets.distance(x,y,p) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
 
 function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy)
     if distance_lower_bound(a,b) > 0
@@ -285,12 +295,87 @@ function add_child_approximation!(g,model,parent_id,child_id)
     return g
 end
 
-export construct_geometry_tree
-function construct_geometry_tree(g,geom)
+export construct_geometry_tree!
+function construct_geometry_tree!(g,geom)
     add_node!(g,GeomNode(geom),:BaseGeom)
     add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
     add_child_approximation!(g,Hyperrectangle,:Polyhedron,:Hyperrectangle)
     add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
+end
+
+### Collision Table
+const CollisionStack = Dict{Int,Set{ID}} where {ID}
+get_active_collision_ids(c::CollisionStack,t::Int) = get(c,t,valtype(c)())
+
+"""
+    CollisionTable <: AbstractCustomGraph{Graph,CollisionStack,I}
+
+A Data structure for efficient discrete-time collision checking between large
+    numbers of objects.
+An edge between two nodes indicates that those nodes are "eligible" to collide.
+If there is no edge, we don't need to check collisions.
+Each node of the graph is a `CollisionStack`--a kind of timer bank that keeps
+track of when collision checking needs to be performed between two objects.
+The timing depends on the distance between the objects at a given time step, as
+well as the maximum feasible speed of each object.
+"""
+@with_kw struct CollisionTable{ID} <: AbstractCustomGraph{Graph,CollisionStack{ID},ID}
+    graph               ::Graph                 = Graph()
+    nodes               ::Vector{CollisionStack{ID}} = Vector{CollisionStack{ID}}()
+    vtx_map             ::Dict{ID,Int}           = Dict{ID,Int}()
+    vtx_ids             ::Vector{ID}             = Vector{ID}()
+end
+
+function get_transformed_config end
+function get_max_speed end
+
+"""
+    update_collision_table!(table,env_state,env,i,t=0)
+
+Updates the counters in a CollisionTable. Should be called each time the modeled
+process "steps forward" in time.
+"""
+function update_collision_table!(table,env_state,env,i,t=0)
+    c = get_tranformed_config(env,env_state,i,t)
+    stack = get_node(table,i)
+    active_ids = get_active_collision_ids(stack,t)
+    while !isempty(active_ids)
+        j = pop!(active_ids)
+        has_edge(table,i,j) ? nothing : continue
+        cj = get_transformed_config(env,env_state,j,t)
+        d_min = distance_lower_bound(c,cj)
+        v_max = get_max_speed(env,i) + get_max_speed(env,j)
+        dt = d_min / v_max
+        push!(get!(stack,t+Int(floor(dt)),valtype(stack)()),j)
+    end
+end
+
+function init_collision_table!(table,env_state,env,i,t=0)
+    stack = get_node(table,i)
+    for j in outneighbors(table,i)
+        push!(get!(stack,t,valtype(stack)()),get_vtx_id(table,j))
+    end
+    update_collision_table!(table,env_state,env,i,t)
+end
+
+"""
+    find_collision(table,env_state,env,i,t=0)
+
+Checks for collisions between object "i" and all objects that may be (according
+    to the table) near enough to warrant collision checking at time `t`.
+"""
+function find_collision(table,env_state,env,i,t=0)
+    c = get_tranformed_config(env,env_state,i,t)
+    stack = get_node(table,i)
+    active_ids = get_active_collision_ids(stack,t)
+    for j in active_ids
+        has_edge(table,i,j) ? nothing : continue
+        cj = get_transformed_config(env,env_state,j,t)
+        if has_overlap(c,cj)
+            return true, j
+        end
+    end
+    return false, -1
 end
 
 

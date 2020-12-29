@@ -1,6 +1,7 @@
 using HierarchicalGeometry
 using LazySets
 using Polyhedra
+using LightGraphs, GraphUtils, Test
 # using GeometryTypes
 using GeometryBasics
 using MeshCat
@@ -29,8 +30,10 @@ lazy_set = UnionSet(ball,ball2)
 model = HierarchicalGeometry.equatorial_overapprox_model()
 hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
+# poly = Polyhedra.polyhedron(LazySets.translate(hpoly,[3.0,0.0,0.0]))
 
 setobject!(vis[:ball], GeometryBasics.Sphere(Point(ball.center...),ball.radius))
+setobject!(vis[:ball2], GeometryBasics.Sphere(Point(ball2.center...),ball2.radius))
 setobject!(vis[:polytope], Polyhedra.Mesh(poly), POLYHEDRON_MATERIAL)
 
 MeshCat.delete!(vis)
