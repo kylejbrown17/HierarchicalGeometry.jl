@@ -4,6 +4,8 @@ using Polyhedra
 using LightGraphs, GraphUtils, Test
 # using GeometryTypes
 using GeometryBasics
+using CoordinateTransformations
+using Rotations
 using MeshCat
 using Meshing
 using Colors

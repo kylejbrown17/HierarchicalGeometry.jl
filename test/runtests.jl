@@ -1,5 +1,9 @@
 using HierarchicalGeometry
-
+using GeometryBasics
+using CoordinateTransformations
+using Rotations
+using Polyhedra
+using GraphUtils, LightGraphs
 using LazySets
 using StaticArrays
 
@@ -19,8 +23,11 @@ global_logger(SimpleLogger(stderr, Logging.Debug))
     end
 
     for (a,b) in zip(x,y)
-        @test isapprox(a,b, rtol=rtol, atol=atol)
+        if !isapprox(a,b, rtol=rtol, atol=atol)
+            return false
+        end
     end
+    return true
 end
 
 # Check if array equals a single value
@@ -30,13 +37,19 @@ end
                   atol::F=zero(F)) where {F<:AbstractFloat}
 
     for a in x
-        @test isapprox(a, y, rtol=rtol, atol=atol)
+        if !isapprox(a, y, rtol=rtol, atol=atol)
+            return false
+        end
     end
+    return true
 end
 
 @testset "HierarchicalGeometry.jl" begin
     testdir = joinpath(dirname(@__DIR__), "test")
     @time @testset "HierarchicalGeometry.Overapproximation" begin
         include(joinpath(testdir, "test_approximations.jl"))
+    end
+    @time @testset "HierarchicalGeometry.Transformations" begin
+        include(joinpath(testdir, "test_transformations.jl"))
     end
 end

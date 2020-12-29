@@ -598,6 +598,12 @@ git-tree-sha1 = "cfbac6c1ed70c002ec6361e7fd334f02820d6419"
 uuid = "ae029012-a4dd-5104-9daa-d747884805df"
 version = "1.1.2"
 
+[[Rotations]]
+deps = ["LinearAlgebra", "StaticArrays", "Statistics"]
+git-tree-sha1 = "2ed8d8a16d703f900168822d83699b8c3c1a5cd8"
+uuid = "6038ab10-8711-5258-84ad-4b1120ba62dc"
+version = "1.0.2"
+
 [[RoundingEmulator]]
 git-tree-sha1 = "40b9edad2e5287e05bd413a38f61a8ff55b9557b"
 uuid = "5eaf0fd0-dfba-4ccb-bf02-d820a40db705"

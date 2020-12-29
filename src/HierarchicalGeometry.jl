@@ -6,8 +6,73 @@ using Polyhedra
 using LazySets
 using GeometryBasics
 using CoordinateTransformations
+using Rotations
 using LightGraphs, GraphUtils
 using Parameters
+
+
+const BallType = Ball2
+get_center(s::Ball2) = LazySets.center(s)
+get_radius(s::Ball2) = s.radius
+GeometryBasics.Sphere(s::Ball2) = GeometryBasics.Sphere(Point(s.center...),s.radius)
+
+const RectType = Hyperrectangle
+get_center(s::Hyperrectangle) = s.center
+get_radius(s::Hyperrectangle) = s.radius
+GeometryBasics.HyperRectangle(s::Hyperrectangle) = GeometryBasics.HyperRectangle(Vec((s.center .- s.radius)...),2*Vec(s.radius...))
+
+export
+    transform,
+    transform!
+
+"""
+    transform(geom,t)
+
+Transform geometry `geom` according to the transformation `t`.
+TODO: It is important for all base geometries to be defined with respect to
+their own origin.
+"""
+function transform end
+function transform! end
+
+transform(v::V,t) where {V<:AbstractVector} = V(t(v))
+function transform!(v::V,t) where {V<:AbstractVector}
+    v .= transform(v,t)
+end
+transform(h::LazySets.HalfSpace,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation} = LazySets.HalfSpace(transform(Vector(h.a),t),h.b)
+function transform!(h::LazySets.HalfSpace,t)
+    h.a .= transform!(h).a
+    return h
+end
+### Coordinate Transformations for types
+# Translations
+transform(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.Translation) = LazySets.translate(g,Vector(t.translation))
+transform!(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
+# Rotations (CoordinateTransformations.LinearMap{R<:Rotation})
+transform(g::Ball2,t::CoordinateTransformations.LinearMap) = Ball2(transform(g.center,t),g.radius)
+function transform!(g::Ball2,t::CoordinateTransformations.LinearMap)
+    transform!(g.center,t)
+    return g
+end
+"""
+    "rotating" a Hyperrectangle `g` results in a new Hyperrectangle that bounds the
+    transformed version `g`.
+"""
+transform(g::Hyperrectangle,t::CoordinateTransformations.LinearMap) = overapproximate(transform(convert(LazySets.VPolytope,g),t),Hyperrectangle)
+function transform(g::VPolytope,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation}
+    VPolytope(map(v->transform(v,t), vertices_list(g)))
+end
+function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation}
+    HPolytope(map(h->transform(h,t), constraints_list(g)))
+end
+# Affine Map (composition of translation and rotation)
+function transform(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.AffineMap{R,T}) where {R<:Rotation,T}
+    transform(
+        transform(g,CoordinateTransformations.LinearMap(t.linear)),
+        CoordinateTransformations.Translation(t.translation)
+        )
+end
+
 
 """
     cross_product_operator(x)
@@ -229,13 +294,6 @@ LazySets.ρ(a::AbstractArray,p::GeometryBasics.Point) = ρ(a,Singleton([p.data..
 LazySets.ρ(a::AbstractArray,v::AbstractArray{V,1}) where {V<:GeometryBasics.Point} = minimum(map(x->ρ(a,x),v))
 LazySets.ρ(a::AbstractArray,x::GeometryBasics.Ngon) = ρ(a,coordinates(x))
 
-const BallType = Ball2
-get_center(s::Ball2) = LazySets.center(s)
-get_radius(s::Ball2) = s.radius
-
-const RectType = Hyperrectangle
-get_center(s::Hyperrectangle) = s.center
-get_radius(s::Hyperrectangle) = s.radius
 
 # Distance between sets
 LazySets.distance(a::BallType,b::BallType,p::Real=2.0) = norm(get_center(a)-get_center(b),p) - (get_radius(a)+get_radius(b))
