@@ -25,6 +25,8 @@ end
 let
     geom = LazySets.Ball2(zeros(3),4.0)
     hpoly = overapproximate(geom,equatorial_overapprox_model())
+    @test is_intersection_empty(hpoly,LazySets.translate(hpoly,[9.0,0.0,0.0]))
+    @test !is_intersection_empty(hpoly,LazySets.translate(hpoly,[2.0,0.0,0.0]))
     vpoly = tovrep(hpoly)
     overapproximate(hpoly,Ball2(LazySets.center(hpoly),1.0))
     overapproximate(hpoly,Ball2)
@@ -62,9 +64,9 @@ let
     geom = LazySets.Ball2(zeros(3),1.0)
     construct_geometry_tree(g,geom)
 
-    g2 = GeometryHierarchy()
+    g = GeometryHierarchy()
     geom2 = LazySets.translate(geom,[3.0,0.0,0.0])
-    add_node!(g2,GeomNode(geom2),:BaseGeom)
+    add_node!(g,GeomNode(geom2),:BaseGeom)
     construct_geometry_tree(g2,geom2)
 
     distance_lower_bound(geom,geom2)
