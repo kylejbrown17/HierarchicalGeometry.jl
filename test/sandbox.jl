@@ -1,8 +1,9 @@
-using Polyhedra
-using LazySets
-using MeshCat
 using HierarchicalGeometry
-using GeometryTypes
+using LazySets
+using Polyhedra
+using MeshCat
+# using GeometryTypes
+using GeometryBasics
 
 vis = Visualizer()
 render(vis)
@@ -27,6 +28,7 @@ model = HierarchicalGeometry.equatorial_overapprox_model()
 hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 
+setobject!(vis, GeometryBasics.Sphere(Point(ball.center...),ball.radius))
 setobject!(vis, Polyhedra.Mesh(poly))
 
 MeshCat.delete!(vis)

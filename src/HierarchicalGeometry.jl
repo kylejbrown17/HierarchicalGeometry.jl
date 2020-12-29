@@ -4,7 +4,9 @@ using StaticArrays
 using LinearAlgebra
 using Polyhedra
 using LazySets
-using GeometryTypes
+using GeometryBasics
+using LightGraphs, GraphUtils
+using Parameters
 
 """
     cross_product_operator(x)
@@ -17,17 +19,37 @@ cross_product_operator(x) = SMatrix{3,3}(
      -x[2]  x[1]    0.0]
 )
 
+export GeomNode
+struct GeomNode{G}
+    # id::Symbol
+    geom::G
+end
+
+export GeometryHierarchy
 """
     GeometryHierarchy
 
 A hierarchical representation of geometry
 Fields:
 * graph - encodes the hierarchy of geometries
-* geoms -
+* nodes - geometry nodes
 """
-# struct GeometryHierarchy
-#
-# end
+@with_kw struct GeometryHierarchy <: AbstractCustomDiGraph{GeomNode,Symbol}
+    graph               ::DiGraph               = DiGraph()
+    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
+    vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
+    vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
+end
+
+"""
+    GeometryCollection
+
+Stores a collection of geometries
+"""
+struct GeometryCollection
+    geoms::Vector{GeometryHierarchy}
+end
+
 export
     GridDiscretization,
     GridOccupancy,
@@ -37,7 +59,7 @@ struct GridDiscretization{N,T}
     origin::SVector{N,T}
     discretization::SVector{N,T}
 end
-get_hyperrectangle(m::GridDiscretization,idxs) = Hyperrectangle(m.origin .+ idxs.*m.discretization, m.discretization/2)
+get_hyperrectangle(m::GridDiscretization,idxs) = Hyperrectangle(m.origin .+ idxs.*m.discretization, [m.discretization/2...])
 """
     cell_indices(m::GridDiscretization,v)
 
@@ -69,14 +91,14 @@ function LazySets.overapproximate(o::GridOccupancy,::Type{Hyperrectangle})
     finish = findprev(o.occupancy,CartesianIndex(size(o.occupancy)...))
     s = get_hyperrectangle(o,start.I .- 1)
     f = get_hyperrectangle(o,finish.I .- 1)
-    center = (s.center .+ f.center) / 2
+    ctr = (s.center .+ f.center) / 2
     radii = (f.center .- s.center .+ o.grid.discretization) / 2
-    Hyperrectangle(center,radii)
+    Hyperrectangle(ctr ,radii)
 end
 function LazySets.overapproximate(lazy_set,grid::GridDiscretization)
     rect = overapproximate(lazy_set,Hyperrectangle)
-    starts = center(rect) .- radius_hyperrectangle(rect)
-    stops = center(rect) .+ radius_hyperrectangle(rect)
+    starts = LazySets.center(rect) .- radius_hyperrectangle(rect)
+    stops = LazySets.center(rect) .+ radius_hyperrectangle(rect)
     @show start_idxs = cell_indices(grid,starts)
     @show stop_idxs = cell_indices(grid,stops)
     @show offset = SVector(start_idxs...) .- 1
@@ -176,9 +198,10 @@ function equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=coll
     PolyhedronOverapprox(tuple(vecs...))
 end
 
-function LazySets.overapproximate(lazy_set,model::PolyhedronOverapprox{N},epsilon::Float64=0.1) where {D,N}
-    halfspaces = map(v->LazySets.HalfSpace(v,ρ(v,lazy_set)),get_support_vecs(model))
-    sort!(halfspaces; by=h->ρ(h.a, lazy_set))
+LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
+
+function LazySets.overapproximate(lazy_set,model::HPolytope,epsilon::Float64=0.1)
+    halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
     poly = HPolyhedron()
     while !isempty(halfspaces) #&& !isbounded(poly)
         poly = intersection(poly,halfspaces[1])
@@ -186,98 +209,87 @@ function LazySets.overapproximate(lazy_set,model::PolyhedronOverapprox{N},epsilo
     end
     @assert isbounded(poly)
     hpoly = convert(HPolytope,poly)
-    # vpoly = tovrep(hpoly)
-    # continue adding new halfspace constraints until the distance "clipped off"
-    # by the new halfspace constraint is less than epsilon
-    # while !isempty(halfspaces)
-    #     for v in vertices_list(hpoly)
-    #
-    #     end
-    # end
     hpoly
 end
+LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproximate(lazy_set,HPolytope(m),args...)
 
-function LazySets.overapproximate(lazy_set::Polyhedron,sphere::H) where {H<:HyperSphere}
-    r = maximum(map(v->norm(v-origin(sphere)), points(vrep(lazy_set))))
-    HyperSphere(origin(sphere),r)
+# Extending overapproximation to types from GeometryBasics
+LazySets.ρ(a::AbstractArray,p::GeometryBasics.Point) = ρ(a,Singleton([p.data...]))
+LazySets.ρ(a::AbstractArray,v::AbstractArray{V,1}) where {V<:GeometryBasics.Point} = minimum(map(x->ρ(a,x),v))
+LazySets.ρ(a::AbstractArray,x::GeometryBasics.Ngon) = ρ(a,coordinates(x))
+
+const BallType = Ball2
+get_center(s::Ball2) = LazySets.center(s)
+get_radius(s::Ball2) = s.radius
+
+const RectType = Hyperrectangle
+get_center(s::Hyperrectangle) = s.center
+get_radius(s::Hyperrectangle) = s.radius
+
+# Distance between sets
+LazySets.distance(a::BallType,b::BallType,p::Real=2.0) = norm(get_center(a)-get_center(b),p) - (get_radius(a)+get_radius(b))
+function LazySets.distance(a::Hyperrectangle,b::Hyperrectangle,p::Real=2.0)
+    m = minkowski_sum(a,b)
+    d = map(h->dot(h.a,get_center(a))-h.b, constraints_list(m))
+    sort!(d;rev=true)
+    idx = findlast(d .> 0.0)
+    if idx === nothing
+        return d[1]
+    else
+        return norm(d[1:idx])
+    end
 end
-# function LazySets.overapproximate(lazy_set::Polyhedron,rect::H) where {H<:HyperRectangle}
-#     r_p = maximum(points(vrep(lazy_set)))
-#     r_n = minimum(points(vrep(lazy_set)))
-#     HyperSphere(origin(sphere),r)
-# end
+distance_lower_bound(a::BallType,b::BallType) = LazySets.distance(a,b)
+distance_lower_bound(a::Hyperrectangle,b::Hyperrectangle) = LazySets.distance(a,b)
+distance_lower_bound(a::GeomNode{G},b::GeomNode{H}) where {G<:Union{BallType,RectType},H<:Union{BallType,RectType}} = distance_lower_bound(a.geom,b.geom)
+distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
+distance_lower_bound(a::GeometryCollection,b::GeometryCollection) = minimum(distance_lower_bound(x,y) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
 
-# """
-#     sort_facet_vtxs
-#
-# Returns a counterclockwise ordering of 'vtx_ids' around the face defined by
-# the halfspace associated with h_idx. It is assumed that the vertices form a
-# convex polygon
-# """
-# function sort_facet_vtxs(poly,h_idx,vtx_idxs)
-#     if !isempty(vtx_idxs)
-#         vtxs = map(v->get(poly,v), vtx_idxs)
-#         h = get(poly,h_idx) # halfspace
-#         ctr = sum(vtxs)
-#         # axes
-#         a1 = normalize(vtxs[1]-ctr)
-#         a2 = normalize(cross(h.a,a1))
-#         # angles = map(v->atan(dot(a2,v),dot(a1,v)))
-#         return sort(vtx_idxs;by=v->atan(dot(a2,get(poly,v)),dot(a1,get(poly,v))))
-#     end
-#     return vtx_idxs
-# end
+function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy)
+    if distance_lower_bound(a,b) > 0
+        return false
+    end
+    if isempty(intersection(get_node(a,:Hyperrectangle),get_node(b,:Hyperrectangle)))
+        return false
+    end
+    if isempty(intersection(get_node(a,:Polyhedron),get_node(b,:Polyhedron)))
+        return false
+    end
+    return true
+end
 
-# """
-#     polytope_vtxs_and_edges
-#
-# Identify the edges of each facet of a polytope
-# """
-# function polytope_vtxs_and_edges(hpolytope::AbstractPolyhedron)
-#     poly = polyhedron(hpolytope)
-#     vtxs = collect(points(poly))
-#     edges = Vector{Tuple{Int,Int}}()
-#     for idx in eachindex(halfspaces(poly))
-#         vtx_idxs = incidentpointindices(poly,idx)
-#         sorted_vtx_ids = sort_facet_vtxs(poly,idx,vtx_idxs)
-#         for i in 1:length(sorted_vtx_ids)-1
-#             v1 = sorted_vtx_ids[i]
-#             v2 = sorted_vtx_ids[i+1]
-#             push!(edges, (v1.value, v2.value))
-#         end
-#         push!(edges,(sorted_vtx_ids[end].value,sorted_vtx_ids[1].value))
-#     end
-#     return vtxs, edges
-# end
-#
-# function write_vertices(filename,vtxs::Vector{Vector{Float64}})
-#     open(filename, "w") do io
-#         for v in vtxs
-#             for c in v
-#                 print(io,c," ")
-#             end
-#             print(io,"\n")
-#         end
-#     end
-# end
-#
-# function write_edges(filename,edge_list::Vector{Tuple{Int,Int}})
-#     open(filename, "w") do io
-#         for e in edge_list
-#             for v in e
-#                 print(io,v," ")
-#             end
-#             print(io,"\n")
-#         end
-#     end
-# end
-#
-# function write_vtxs_and_edges(filename,poly)
-#     vtx_file = join([filename,".nodes"])
-#     edge_file = join([filename,".edges"])
-#     vtxs, edge_list = polytope_vtxs_and_edges(poly)
-#     write_vertices(vtx_file,vtxs)
-#     write_edges(edge_file,edge_list)
-# end
+
+"""
+    LazySets.center(p::AbstractPolytope)
+
+A hacky way of choosing a reasonable center for a polytope.
+"""
+LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
+function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H) where {H<:BallType}
+    r = maximum(map(v->norm(v-get_center(sphere)), vertices_list(lazy_set)))
+    Ball2(get_center(sphere),r)
+end
+function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H}) where {H<:BallType}
+    overapproximate(s,H(LazySets.center(s),1.0))
+end
+
+export add_child_approximation!
+function add_child_approximation!(g,model,parent_id,child_id)
+    @assert has_vertex(g,parent_id)
+    @assert !has_vertex(g,child_id)
+    geom = overapproximate(get_node(g,parent_id).geom,model)
+    add_node!(g,GeomNode(geom),child_id)
+    add_edge!(g,parent_id,child_id)
+    return g
+end
+
+export construct_geometry_tree
+function construct_geometry_tree(g,geom)
+    add_node!(g,GeomNode(geom),:BaseGeom)
+    add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
+    add_child_approximation!(g,Hyperrectangle,:Polyhedron,:Hyperrectangle)
+    add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
+end
+
 
 end
