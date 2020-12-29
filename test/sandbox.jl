@@ -8,9 +8,7 @@ using GeometryBasics
 vis = Visualizer()
 render(vis)
 
-ball = LazySets.Ball2(zeros(3),1.0)
-ball2 = LazySets.Ball2([1.0,0.0,0.0],1.0)
-lazy_set = UnionSet(ball,ball2)
+ball = LazySets.Ball2(zeros(3),2.0)
 
 bbox = overapproximate(ball)
 hpoly = convert(LazySets.HPolytope,bbox)
@@ -22,9 +20,9 @@ poly = Polyhedra.polyhedron(hpoly)
 translated_hpoly = LazySets.Translation(hpoly,[1.0,1.0,1.0])
 
 
-# model = PolyhedronOverapprox(3,8)
+ball2 = LazySets.Ball2([3.0,0.0,0.0],1.0)
+lazy_set = UnionSet(ball,ball2)
 model = HierarchicalGeometry.equatorial_overapprox_model()
-# model = HierarchicalGeometry.equatorial_overapprox_model([0.0],0.0:π/2:2π)
 hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 

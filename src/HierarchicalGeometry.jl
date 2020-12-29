@@ -201,7 +201,9 @@ end
 LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 
 function LazySets.overapproximate(lazy_set,model::HPolytope,epsilon::Float64=0.1)
-    halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
+    halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)), constraints_list(model))
+    sort!(halfspaces; by = h->h.b)
+    # halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
     poly = HPolyhedron()
     while !isempty(halfspaces) #&& !isbounded(poly)
         poly = intersection(poly,halfspaces[1])
