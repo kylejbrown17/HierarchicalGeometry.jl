@@ -62,3 +62,29 @@ let
         @test array_isapprox(Vector(a(v1)),v2)
     end
 end
+let
+    tree = HierarchicalGeometry.TransformTree{Symbol}()
+    root = HierarchicalGeometry.TransformNode()
+    add_node!(tree,root,:ONE)
+    GraphUtils.add_child!(tree,deepcopy(root),:TWO,:ONE)
+    GraphUtils.add_child!(tree,deepcopy(root),:THREE,:TWO)
+    a = HierarchicalGeometry.get_parent_transform(tree,:ONE)
+    b = HierarchicalGeometry.local_transform(tree,:ONE)
+
+    t = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+    for v in LightGraphs.vertices(tree)
+        n = get_node(tree,v)
+        HierarchicalGeometry.set_local_transform!(n,t)
+    end
+    for v in LightGraphs.vertices(tree)
+        n = get_node(tree,v)
+        data = [HierarchicalGeometry.global_transform(n).translation.data...]
+        @test array_isapprox(data,[0.0, 0.0, 0.0])
+    end
+    HierarchicalGeometry.update_transform_tree!(tree,:ONE)
+    for v in LightGraphs.vertices(tree)
+        n = get_node(tree,v)
+        data = [HierarchicalGeometry.global_transform(n).translation.data...]
+        @test array_isapprox(data,[v,0.0,0.0])
+    end
+end

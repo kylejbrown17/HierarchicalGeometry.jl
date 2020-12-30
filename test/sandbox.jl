@@ -9,6 +9,7 @@ using Rotations
 using MeshCat
 using Meshing
 using Colors
+using Test
 
 
 POLYHEDRON_MATERIAL = MeshPhongMaterial(color=RGBA{Float32}(1, 0, 0, 0.5))

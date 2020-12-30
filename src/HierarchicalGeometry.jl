@@ -10,20 +10,21 @@ using Rotations
 using LightGraphs, GraphUtils
 using Parameters
 
+export
+    transform,
+    transform!,
+    distance_lower_bound,
+    has_overlap
 
+const BaseGeometry = Union{Ball2,Hyperrectangle,AbstractPolytope}
 const BallType = Ball2
 get_center(s::Ball2) = LazySets.center(s)
 get_radius(s::Ball2) = s.radius
 GeometryBasics.Sphere(s::Ball2) = GeometryBasics.Sphere(Point(s.center...),s.radius)
-
 const RectType = Hyperrectangle
 get_center(s::Hyperrectangle) = s.center
 get_radius(s::Hyperrectangle) = s.radius
 GeometryBasics.HyperRectangle(s::Hyperrectangle) = GeometryBasics.HyperRectangle(Vec((s.center .- s.radius)...),2*Vec(s.radius...))
-
-export
-    transform,
-    transform!
 
 """
     transform(geom,t)
@@ -32,9 +33,6 @@ Transform geometry `geom` according to the transformation `t`.
 TODO: It is important for all base geometries to be defined with respect to
 their own origin.
 """
-function transform end
-function transform! end
-
 transform(v::V,t) where {V<:AbstractVector} = V(t(v))
 function transform!(v::V,t) where {V<:AbstractVector}
     v .= transform(v,t)
@@ -44,11 +42,8 @@ function transform!(h::LazySets.HalfSpace,t)
     h.a .= transform!(h).a
     return h
 end
-### Coordinate Transformations for types
-# Translations
-transform(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.Translation) = LazySets.translate(g,Vector(t.translation))
-transform!(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
-# Rotations (CoordinateTransformations.LinearMap{R<:Rotation})
+transform(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate(g,Vector(t.translation))
+transform!(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
 transform(g::Ball2,t::CoordinateTransformations.LinearMap) = Ball2(transform(g.center,t),g.radius)
 function transform!(g::Ball2,t::CoordinateTransformations.LinearMap)
     transform!(g.center,t)
@@ -66,37 +61,169 @@ function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where
     HPolytope(map(h->transform(h,t), constraints_list(g)))
 end
 # Affine Map (composition of translation and rotation)
-function transform(g::Union{Hyperrectangle,Ball2,HPolytope,VPolytope},t::CoordinateTransformations.AffineMap{R,T}) where {R<:Rotation,T}
+function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) where {R<:Rotation,T}
     transform(
         transform(g,CoordinateTransformations.LinearMap(t.linear)),
         CoordinateTransformations.Translation(t.translation)
         )
 end
 
+# Transform Tree
+mutable struct TransformNode
+    local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
+    global_transform::CoordinateTransformations.Transformation # transform from the base frame to the child frame
+end
+function TransformNode()
+    TransformNode(
+    CoordinateTransformations.LinearMap(RotZ(0)) ∘ CoordinateTransformations.Translation(0,0,0),
+    CoordinateTransformations.LinearMap(RotZ(0)) ∘ CoordinateTransformations.Translation(0,0,0),
+    )
+end
+local_transform(n::TransformNode) = n.local_transform
+global_transform(n::TransformNode) = n.global_transform
+function set_local_transform!(n::TransformNode,t)
+    n.local_transform = t
+end
+function set_global_transform!(n::TransformNode,t)
+    n.global_transform = t
+end
+const transform_node_accessor_interface = [:local_transform,:global_transform]
+const transform_node_mutator_interface = [:set_local_transform!,:set_global_transform!]
+@with_kw struct TransformTree{ID} <: AbstractCustomTree{TransformNode,ID}
+    graph               ::DiGraph               = DiGraph()
+    nodes               ::Vector{TransformNode} = Vector{TransformNode}()
+    vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
+    vtx_ids             ::Vector{ID}            = Vector{ID}()
+end
+for op in transform_node_accessor_interface
+    @eval $op(g::TransformTree,v) = $op(get_node(g,v))
+end
+function get_parent_transform(g::TransformTree,v)
+    vp = get_parent(g,v)
+    if has_vertex(g,vp)
+        return global_transform(get_node(g,vp))
+    end
+    return global_transform(TransformNode())
+end
+"""
+    update_transform_tree!(g::TransformTree,v)
+
+Updates the global transforms of `v` and its successors based on their local
+transforms.
+"""
+function update_transform_tree!(g::TransformTree,v)
+    n = get_node(g,v)
+    set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
+    for vp in outneighbors(g,v)
+        update_transform_tree!(g,vp)
+    end
+    return g
+end
+function set_local_transform!(g::TransformTree,v,t,update=true)
+    set_local_transform!(get_node(g,v),t)
+    if update
+        update_transform_tree!(g,v)
+    end
+    return g
+end
 
 """
-    cross_product_operator(x)
-
-Computes `Ωₓ` such that `Ωₓy = x ⨯ y`
+    get_geom(x)
 """
-cross_product_operator(x) = SMatrix{3,3}(
-    [0.0    -x[3]   x[2];
-     x[3]   0.0     -x[1];
-     -x[2]  x[1]    0.0]
-)
+get_geom(x) = x
+
+"""
+    CachedElement{G}
+
+A mutable container for geometries
+"""
+mutable struct CachedElement{G}
+    geom::G
+    is_computed::Bool
+end
+CachedElement(geom) = CachedElement(geom,false)
+get_geom(n::CachedElement) = n.geom
+is_computed(n::CachedElement) = n.is_computed
+function set_computed!(n::CachedElement,val::Bool=true)
+    n.is_computed = val
+end
+function set_computed_geometry!(n::CachedElement,g)
+    n.geom = g
+    set_computed!(n,true)
+    return g
+end
+cached_element_accessor_interface = [:is_computed]
+cached_element_mutator_interface = [:set_computed_geometry!,:set_computed!]
+
+transformed_element_placeholder(g::BaseGeometry,t) = g
+"""
+    TransformedElement{G,V}
+
+Stores the base geometry, the transform, and a cached version of the transformed
+geometry. The cache of `n::TransformedElement` is initially empty, but becomes
+populated after the first call to `get_geom(n)`
+"""
+struct TransformedElement{G,V}
+    base_geom::G
+    transform::CoordinateTransformations.AffineMap
+    new_geom::CachedElement{V}
+end
+function TransformedElement(g,t)
+    p = transformed_element_placeholder(g,t)
+    TransformedElement(g,t,CachedElement(p))
+end
+function TransformedElement(n::TransformedElement,t)
+    TransformedElement(n.base_geom,compose(t,n.transform))
+end
+for op in cached_element_accessor_interface
+    @eval $op(n::TransformedElement) = $op(n.new_geom)
+end
+for op in cached_element_mutator_interface
+    @eval $op(n::TransformedElement,val) = $op(n.new_geom,val)
+end
+"""
+    get_geom(n::TransformedElement)
+
+Computes required geometry on the fly.
+"""
+function get_geom(n::TransformedElement)
+    if is_computed(n)
+        return get_geom(n.new_geom)
+    else
+        g = transform(n.base_geom,n.transform)
+        set_computed_geometry!(n,g)
+        return g
+    end
+end
+function transform(n::TransformedElement,t)
+    TransformedElement(n.base_geom,compose(t,n.transform))
+end
+# Hierarchical Geometry Representations
+
+struct Assembly
+    parts::Vector{TransformedElement}
+end
+transform(n::Assembly,t) = Assembly(map(p->transform(p,t),n.parts))
+transformed_element_placeholder(g::Assembly,t) = g
+function transform!(n::Assembly,t)
+    for p in n.parts
+        transform!(p)
+    end
+    return n
+end
 
 export GeomNode
 struct GeomNode{G}
     # id::Symbol
     geom::G
 end
-LazySets.translate(n::GeomNode,args...) = GeomNode(LazySets.translate(n.geom))
-function LazySets.translate!(n::GeomNode,args...)
-    LazySets.translate!(n.geom)
+get_geom(n::GeomNode) = get_geom(n.geom)
+transform(n::GeomNode,t) = GeomNode(transform(get_geom(n),t))
+function transform!(n::GeomNode,t)
+    transform!(n.geom,t)
     return n
 end
-(t::CoordinateTransformations.Translation)(n::GeomNode) = LazySets.translate(t.translation.data)
-
+# transformed_element_placeholder()
 
 export GeometryHierarchy
 """
@@ -113,16 +240,10 @@ Fields:
     vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
     vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
 end
-
-export GeometryCollection
-"""
-    GeometryCollection{G}
-
-Stores a collection of geometries
-"""
-struct GeometryCollection{G}
-    geoms::Vector{G}
+function transformed_element_placeholder(g::GeometryHierarchy,t)
+    GeometryHierarchy(get_graph(g),nodes=map(n->TransformedElement(n,t)))
 end
+
 
 export
     GridDiscretization,
@@ -312,8 +433,8 @@ distance_lower_bound(a::BallType,b::BallType) = LazySets.distance(a,b)
 distance_lower_bound(a::Hyperrectangle,b::Hyperrectangle) = LazySets.distance(a,b)
 distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(a.geom,b.geom)
 distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
-distance_lower_bound(a::GeometryCollection,b::GeometryCollection) = minimum(distance_lower_bound(x,y) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
-LazySets.distance(a::GeometryCollection,b::GeometryCollection,p::Real=2.0) = minimum(LazySets.distance(x,y,p) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
+# distance_lower_bound(a::GeometryCollection,b::GeometryCollection) = minimum(distance_lower_bound(x,y) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
+# LazySets.distance(a::GeometryCollection,b::GeometryCollection,p::Real=2.0) = minimum(LazySets.distance(x,y,p) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
 
 function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy)
     if distance_lower_bound(a,b) > 0
