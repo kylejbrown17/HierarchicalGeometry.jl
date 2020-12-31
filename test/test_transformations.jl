@@ -62,6 +62,7 @@ let
         @test array_isapprox(Vector(a(v1)),v2)
     end
 end
+# Test Transform Tree
 let
     tree = HierarchicalGeometry.TransformTree{Symbol}()
     root = HierarchicalGeometry.TransformNode()
@@ -87,4 +88,41 @@ let
         data = [HierarchicalGeometry.global_transform(n).translation.data...]
         @test array_isapprox(data,[v,0.0,0.0])
     end
+end
+# Test CachedElement
+let
+    c = HierarchicalGeometry.CachedElement(1)
+    @test get_element(c) == 1
+    set_up_to_date!(c,false)
+    @test !is_up_to_date(c)
+    update_element!(c,2)
+    @test is_up_to_date(c)
+    @test get_element(c) == 2
+end
+# Test GeomNode
+let
+    geom = Ball2(ones(3),1.0)
+    n = GeomNode(geom)
+    @test array_isapprox(get_base_geom(n).center,geom.center)
+    set_up_to_date!(n,true)
+    @test is_up_to_date(n)
+    t = compose(CoordinateTransformations.Translation(1.0,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+    set_global_transform!(n,t)
+    @test !is_up_to_date(n)
+    @test array_isapprox(get_cached_geom(n).center, geom.center .+ [t.translation.data...])
+    @test is_up_to_date(n)
+    set_global_transform!(n,t)
+    @test !is_up_to_date(n)
+end
+# relative transformations
+let
+    a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0.0)))
+    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotZ(0.5*π)))
+    rot_err = Rotations.rotation_error(a,b)
+    t = HierarchicalGeometry.relative_transform(a,b)
+    @test array_isapprox(t.linear,b.linear;rtol=1e-12,atol=1e-12)
+
+    a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotXYZ(0.0,0.0,0.0)))
+    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotXYZ(0.1,0.0,1.0*π)))
+    t = HierarchicalGeometry.relative_transform(a,b)
 end

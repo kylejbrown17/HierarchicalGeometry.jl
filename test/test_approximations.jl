@@ -1,26 +1,41 @@
 let
-    m = GridDiscretization(SVector(zeros(3)...),SVector(ones(3)...))
+    a = Hyperrectangle([0.0,0.0],[1.0,1.0])
+    b = Hyperrectangle([3.0,0.0],[1.0,1.0])
+    c = Hyperrectangle([3.0,3.0],[1.0,1.0])
+    d = Hyperrectangle([2.0,0.0],[1.5,0.25])
+    @test isapprox(LazySets.distance(a,b), 1.0)
+    @test isapprox(LazySets.distance(a,c), sqrt(2))
+    @test isapprox(LazySets.distance(a,d), -0.5)
 
-    GridOccupancy(m,trues(2,2,2))
-    o1 = GridOccupancy(m,trues(2,2,2),SVector(0,0,0))
-    @test (o1 + 1).offset == SVector(1,1,1)
+    @test isapprox(LazySets.distance(a,b), distance_lower_bound(a,b))
 
-    o2 = GridOccupancy(m,trues(2,2,2),SVector(1,1,1))
-    @test has_overlap(o1,o2)
-    @test has_overlap(o1+[0,1,1],o2)
-    @test !has_overlap(o1,o2 + 1)
-    @test !has_overlap(o1 - 1,o2)
-    rect = overapproximate(o1,Hyperrectangle)
-    @test m.origin in rect
-    @test !isempty(intersection(Singleton(m.origin),rect))
+    @test !has_overlap(a,b)
+    @test !has_overlap(a,c)
+    @test has_overlap(a,d)
+
+    @test !has_overlap(convert(HPolytope,a),convert(HPolytope,c))
+    @test has_overlap(convert(HPolytope,a),convert(HPolytope,d))
 end
 let
-    m = GridDiscretization(SVector(zeros(3)...),SVector(ones(3)...))
-    @test HierarchicalGeometry.cell_indices(m,[0.0,0.0,0.0]) == [0,0,0]
-    HierarchicalGeometry.get_hyperrectangle(m,[0,0,0])
+    a = Ball2([0.0,0.0],1.0)
+    b = Ball2([2.0,0.0],1.0)
+    c = Ball2([1.0,0.0],0.5)
+    d = Ball2([0.0,0.0],0.5)
+    @test isapprox(LazySets.distance(a,b), 0.0)
+    @test isapprox(LazySets.distance(a,c), -0.5)
+    @test isapprox(LazySets.distance(a,d), -1.5)
+    @test isapprox(LazySets.distance(b,d), 0.5)
 
-    @test HierarchicalGeometry.cell_indices(m,[1.0,0.0,0.0]) == [1,0,0]
-    @test HierarchicalGeometry.cell_indices(m,[-1.0,0.0,0.0]) == [-1,0,0]
+    @test isapprox(LazySets.distance(a,b), distance_lower_bound(a,b))
+
+    @test isapprox(LazySets.distance(GeometryCollection([a]),GeometryCollection([b,c])), -0.5)
+    @test isapprox(distance_lower_bound(GeometryCollection([a]),GeometryCollection([b,c])), -0.5)
+
+    @test has_overlap(a,b)
+    @test has_overlap(a,c)
+    @test has_overlap(a,d)
+    @test !has_overlap(b,d)
+
 end
 let
     geom = LazySets.Ball2(zeros(3),4.0)
@@ -35,28 +50,6 @@ let
     occupancy = overapproximate(hpoly,m)
     @test !is_intersection_empty(occupancy,occupancy+2)
     @test is_intersection_empty(occupancy,occupancy+8)
-end
-let
-    a = Hyperrectangle([0.0,0.0],[1.0,1.0])
-    b = Hyperrectangle([3.0,0.0],[1.0,1.0])
-    c = Hyperrectangle([3.0,3.0],[1.0,1.0])
-    d = Hyperrectangle([2.0,0.0],[1.5,0.25])
-    @test isapprox(LazySets.distance(a,b), 1.0)
-    @test isapprox(LazySets.distance(a,c), sqrt(2))
-    @test isapprox(LazySets.distance(a,d), -0.5)
-end
-let
-    a = Ball2([0.0,0.0],1.0)
-    b = Ball2([2.0,0.0],1.0)
-    c = Ball2([1.0,0.0],0.5)
-    d = Ball2([0.0,0.0],0.5)
-    @test isapprox(LazySets.distance(a,b), 0.0)
-    @test isapprox(LazySets.distance(a,c), -0.5)
-    @test isapprox(LazySets.distance(a,d), -1.5)
-
-    @test isapprox(LazySets.distance(a,b), HierarchicalGeometry.distance_lower_bound(a,b))
-
-    # @test isapprox(LazySets.distance(GeometryCollection([a]),GeometryCollection([b,c])), -0.5)
 end
 let
     a = GeomNode(Hyperrectangle([0.0,0.0],[1.0,1.0]))
@@ -89,3 +82,27 @@ end
 #     transforms = [[0.0,0.0,0.0],[4.0,0.0,0.0],[0.0,4.5,0.0],]
 #
 # end
+let
+    m = GridDiscretization(SVector(zeros(3)...),SVector(ones(3)...))
+
+    GridOccupancy(m,trues(2,2,2))
+    o1 = GridOccupancy(m,trues(2,2,2),SVector(0,0,0))
+    @test (o1 + 1).offset == SVector(1,1,1)
+
+    o2 = GridOccupancy(m,trues(2,2,2),SVector(1,1,1))
+    @test has_overlap(o1,o2)
+    @test has_overlap(o1+[0,1,1],o2)
+    @test !has_overlap(o1,o2 + 1)
+    @test !has_overlap(o1 - 1,o2)
+    rect = overapproximate(o1,Hyperrectangle)
+    @test m.origin in rect
+    @test !isempty(intersection(Singleton(m.origin),rect))
+end
+let
+    m = GridDiscretization(SVector(zeros(3)...),SVector(ones(3)...))
+    @test HierarchicalGeometry.cell_indices(m,[0.0,0.0,0.0]) == [0,0,0]
+    HierarchicalGeometry.get_hyperrectangle(m,[0,0,0])
+
+    @test HierarchicalGeometry.cell_indices(m,[1.0,0.0,0.0]) == [1,0,0]
+    @test HierarchicalGeometry.cell_indices(m,[-1.0,0.0,0.0]) == [-1,0,0]
+end

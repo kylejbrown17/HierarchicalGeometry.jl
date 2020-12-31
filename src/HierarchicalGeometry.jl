@@ -60,7 +60,6 @@ end
 function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation}
     HPolytope(map(h->transform(h,t), constraints_list(g)))
 end
-# Affine Map (composition of translation and rotation)
 function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) where {R<:Rotation,T}
     transform(
         transform(g,CoordinateTransformations.LinearMap(t.linear)),
@@ -68,7 +67,46 @@ function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) 
         )
 end
 
-# Transform Tree
+export
+    distance_lower_bound,
+    has_overlap
+
+LazySets.ρ(a::AbstractArray,p::GeometryBasics.Point) = ρ(a,Singleton([p.data...]))
+LazySets.ρ(a::AbstractArray,v::AbstractArray{V,1}) where {V<:GeometryBasics.Point} = minimum(map(x->ρ(a,x),v))
+LazySets.ρ(a::AbstractArray,x::GeometryBasics.Ngon) = ρ(a,coordinates(x))
+# Distance between sets
+LazySets.distance(a::BallType,b::BallType,p::Real=2.0) = norm(get_center(a)-get_center(b),p) - (get_radius(a)+get_radius(b))
+function LazySets.distance(a::Hyperrectangle,b::Hyperrectangle,p::Real=2.0)
+    m = minkowski_sum(a,b)
+    d = map(h->dot(h.a,get_center(a))-h.b, constraints_list(m))
+    sort!(d;rev=true)
+    idx = findlast(d .> 0.0)
+    if idx === nothing
+        return d[1]
+    else
+        return norm(d[1:idx])
+    end
+end
+distance_lower_bound(a::BallType,b::BallType) = LazySets.distance(a,b)
+distance_lower_bound(a::Hyperrectangle,b::Hyperrectangle) = LazySets.distance(a,b)
+has_overlap(a::BaseGeometry,b::BaseGeometry) = !is_intersection_empty(a,b) # distance_lower_bound(a,b) <= 0.0
+
+export GeometryCollection
+struct GeometryCollection{G}
+    elements::Vector{G}
+end
+for op in [:distance_lower_bound,:(LazySets.distance)]
+    @eval $op(a::GeometryCollection,b) = minimum($op(x,b) for x in a.elements)
+    @eval $op(a::GeometryCollection,b::GeometryCollection) = minimum($op(a,y) for y in b.elements)
+end
+
+export
+    TransformNode,
+    local_transform,
+    global_transform,
+    set_local_transform!,
+    set_global_transform!
+
 mutable struct TransformNode
     local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
     global_transform::CoordinateTransformations.Transformation # transform from the base frame to the child frame
@@ -81,6 +119,26 @@ function TransformNode()
 end
 local_transform(n::TransformNode) = n.local_transform
 global_transform(n::TransformNode) = n.global_transform
+"""
+    relative_transform(a::AffineMap,b::AffineMap)
+
+compute the relative transform between two frames, ᵂT𝐀 and ᵂT𝐁.
+"""
+function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
+    pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
+    rot_err = Rotations.rotation_error(a,b,error_map)
+    q = UnitQuaternion(rot_err)
+    t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
+end
+function Rotations.rotation_error(
+    a::CoordinateTransformations.AffineMap,
+    b::CoordinateTransformations.AffineMap,
+    error_map=MRPMap())
+    rot_err = Rotations.rotation_error(
+        UnitQuaternion(a.linear),
+        UnitQuaternion(b.linear),error_map)
+end
+
 function set_local_transform!(n::TransformNode,t)
     n.local_transform = t
 end
@@ -89,6 +147,7 @@ function set_global_transform!(n::TransformNode,t)
 end
 const transform_node_accessor_interface = [:local_transform,:global_transform]
 const transform_node_mutator_interface = [:set_local_transform!,:set_global_transform!]
+
 @with_kw struct TransformTree{ID} <: AbstractCustomTree{TransformNode,ID}
     graph               ::DiGraph               = DiGraph()
     nodes               ::Vector{TransformNode} = Vector{TransformNode}()
@@ -128,9 +187,28 @@ function set_local_transform!(g::TransformTree,v,t,update=true)
 end
 
 """
-    get_geom(x)
+    check_collision(a,b)
+
+Recursive collision checking
 """
-get_geom(x) = x
+function check_collision(a,b)
+    if has_overlap(a,b)
+        for p in components(b)
+            if check_collision(p,a)
+                return true
+            end
+        end
+    end
+    return false
+end
+
+export
+    CachedElement,
+    get_element,
+    is_up_to_date,
+    set_up_to_date!,
+    set_element!,
+    update_element!
 
 """
     CachedElement{G}
@@ -138,92 +216,69 @@ get_geom(x) = x
 A mutable container for geometries
 """
 mutable struct CachedElement{G}
-    geom::G
-    is_computed::Bool
+    element::G
+    is_up_to_date::Bool
 end
-CachedElement(geom) = CachedElement(geom,false)
-get_geom(n::CachedElement) = n.geom
-is_computed(n::CachedElement) = n.is_computed
-function set_computed!(n::CachedElement,val::Bool=true)
-    n.is_computed = val
+CachedElement(element) = CachedElement(element,false)
+get_element(n::CachedElement) = n.element
+is_up_to_date(n::CachedElement) = n.is_up_to_date
+function set_up_to_date!(n::CachedElement,val::Bool=true)
+    n.is_up_to_date = val
 end
-function set_computed_geometry!(n::CachedElement,g)
-    n.geom = g
-    set_computed!(n,true)
+function set_element!(n::CachedElement,g)
+    n.element = g
     return g
 end
-cached_element_accessor_interface = [:is_computed]
-cached_element_mutator_interface = [:set_computed_geometry!,:set_computed!]
+function update_element!(n::CachedElement,g)
+    set_element!(n,g)
+    set_up_to_date!(n,true)
+    return g
+end
+# accessor_interface(::Type{CachedElement}) = [:is_up_to_date]
+# mutator_interface(::Type{CachedElement}) = [:set_computed_geometry!,:set_up_to_date!]
+const cached_element_accessor_interface = [:is_up_to_date]
+const cached_element_mutator_interface = [:update_element!,:set_element!,:set_up_to_date!]
 
-transformed_element_placeholder(g::BaseGeometry,t) = g
-"""
-    TransformedElement{G,V}
+export
+    GeomNode,
+    get_base_geom,
+    get_cached_geom
 
-Stores the base geometry, the transform, and a cached version of the transformed
-geometry. The cache of `n::TransformedElement` is initially empty, but becomes
-populated after the first call to `get_geom(n)`
-"""
-struct TransformedElement{G,V}
+struct GeomNode{G}
     base_geom::G
-    transform::CoordinateTransformations.AffineMap
-    new_geom::CachedElement{V}
+    transform_node::TransformNode
+    cached_geom::CachedElement{G}
 end
-function TransformedElement(g,t)
-    p = transformed_element_placeholder(g,t)
-    TransformedElement(g,t,CachedElement(p))
+function GeomNode(geom)
+    GeomNode(geom,TransformNode(),CachedElement(geom))
 end
-function TransformedElement(n::TransformedElement,t)
-    TransformedElement(n.base_geom,compose(t,n.transform))
-end
+get_base_geom(n::GeomNode) = n.base_geom
 for op in cached_element_accessor_interface
-    @eval $op(n::TransformedElement) = $op(n.new_geom)
+    @eval $op(g::GeomNode) = $op(g.cached_geom)
 end
 for op in cached_element_mutator_interface
-    @eval $op(n::TransformedElement,val) = $op(n.new_geom,val)
+    @eval $op(g::GeomNode,val) = $op(g.cached_geom,val)
 end
-"""
-    get_geom(n::TransformedElement)
-
-Computes required geometry on the fly.
-"""
-function get_geom(n::TransformedElement)
-    if is_computed(n)
-        return get_geom(n.new_geom)
-    else
-        g = transform(n.base_geom,n.transform)
-        set_computed_geometry!(n,g)
-        return g
+for op in transform_node_accessor_interface
+    @eval $op(g::GeomNode) = $op(g.transform_node)
+end
+function set_local_transform!(n::GeomNode,t)
+    set_local_transform!(n.transform_node,t)
+    set_up_to_date!(n,false)
+end
+function set_global_transform!(n::GeomNode,t)
+    set_global_transform!(n.transform_node,t)
+    set_up_to_date!(n,false)
+end
+function get_cached_geom(n::GeomNode)
+    if !is_up_to_date(n)
+        transformed_geom = transform(get_base_geom(n),global_transform(n))
+        update_element!(n,transformed_geom)
     end
+    return get_element(n.cached_geom)
 end
-function transform(n::TransformedElement,t)
-    TransformedElement(n.base_geom,compose(t,n.transform))
-end
-# Hierarchical Geometry Representations
+distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(get_cached_geom(a),get_cached_geom(b))
 
-struct Assembly
-    parts::Vector{TransformedElement}
-end
-transform(n::Assembly,t) = Assembly(map(p->transform(p,t),n.parts))
-transformed_element_placeholder(g::Assembly,t) = g
-function transform!(n::Assembly,t)
-    for p in n.parts
-        transform!(p)
-    end
-    return n
-end
-
-export GeomNode
-struct GeomNode{G}
-    # id::Symbol
-    geom::G
-end
-get_geom(n::GeomNode) = get_geom(n.geom)
-transform(n::GeomNode,t) = GeomNode(transform(get_geom(n),t))
-function transform!(n::GeomNode,t)
-    transform!(n.geom,t)
-    return n
-end
-# transformed_element_placeholder()
 
 export GeometryHierarchy
 """
@@ -240,73 +295,22 @@ Fields:
     vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
     vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
 end
-function transformed_element_placeholder(g::GeometryHierarchy,t)
-    GeometryHierarchy(get_graph(g),nodes=map(n->TransformedElement(n,t)))
-end
 
-
-export
-    GridDiscretization,
-    GridOccupancy,
-    has_overlap
-
-struct GridDiscretization{N,T}
-    origin::SVector{N,T}
-    discretization::SVector{N,T}
-end
-get_hyperrectangle(m::GridDiscretization,idxs) = Hyperrectangle(m.origin .+ idxs.*m.discretization, [m.discretization/2...])
-"""
-    cell_indices(m::GridDiscretization,v)
-
-get indices of cell of `m` in which `v` falls
-"""
-cell_indices(m::GridDiscretization,v) = SVector(ceil.(Int,(v .- m.origin .- m.discretization/2)./m.discretization)...)
-struct GridOccupancy{N,T,A<:AbstractArray{Bool,N}}
-    grid::GridDiscretization{N,T}
-    occupancy::A
-    offset::SVector{N,Int}
-end
-GridOccupancy(m::GridDiscretization{N,T},o::AbstractArray) where {N,T} = GridOccupancy(m,o,SVector(zeros(Int,N)...))
-Base.:(+)(o::GridOccupancy,v) = GridOccupancy(o.grid,o.occupancy,SVector(o.offset.+v...))
-Base.:(-)(o::GridOccupancy,v) = o+(-v)
-get_hyperrectangle(m::GridOccupancy,idxs) = get_hyperrectangle(m.grid,idxs .+ m.offset)
-function Base.intersect(o1::G,o2::G) where {G<:GridOccupancy}
-    offset = o2.offset - o1.offset
-    starts = max.(1,offset .+ 1)
-    stops = min.(SVector(size(o1.occupancy)),size(o2.occupancy) .+ offset)
-    idxs = CartesianIndex(starts...):CartesianIndex(stops...)
-    overlap = o1.occupancy[idxs] .* o2.occupancy[idxs .- CartesianIndex(offset...)]
-    G(o1.grid,overlap,o2.offset)
-end
-has_overlap(o1::G,o2::G) where {G<:GridOccupancy} = any(intersect(o1,o2).occupancy)
-LazySets.is_intersection_empty(o1::G,o2::G) where {G<:GridOccupancy} = !has_overlap(o1,o2)
-function LazySets.overapproximate(o::GridOccupancy,::Type{Hyperrectangle})
-    origin = o.grid.origin
-    start = findnext(o.occupancy,CartesianIndex(ones(Int,size(origin))...))
-    finish = findprev(o.occupancy,CartesianIndex(size(o.occupancy)...))
-    s = get_hyperrectangle(o,start.I .- 1)
-    f = get_hyperrectangle(o,finish.I .- 1)
-    ctr = (s.center .+ f.center) / 2
-    radii = (f.center .- s.center .+ o.grid.discretization) / 2
-    Hyperrectangle(ctr ,radii)
-end
-function LazySets.overapproximate(lazy_set,grid::GridDiscretization)
-    rect = overapproximate(lazy_set,Hyperrectangle)
-    starts = LazySets.center(rect) .- radius_hyperrectangle(rect)
-    stops = LazySets.center(rect) .+ radius_hyperrectangle(rect)
-    @show start_idxs = cell_indices(grid,starts)
-    @show stop_idxs = cell_indices(grid,stops)
-    @show offset = SVector(start_idxs...) .- 1
-    occupancy = falses((stop_idxs .- offset)...)
-    approx = GridOccupancy(grid,occupancy,offset)
-    for idx in CartesianIndices(occupancy)
-        r = get_hyperrectangle(approx,[idx.I...])
-        if !is_intersection_empty(lazy_set,r)
-            approx.occupancy[idx] = true
+distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
+function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=:Hypersphere)
+    v = get_vtx(a,leaf_id)
+    while has_vertex(a,v)
+        k = get_vtx_id(a,v)
+        if has_vertex(b,k)
+            if !has_overlap(get_node(a,k),get_node(b,k))
+                return false
+            end
         end
+        v = get_parent(a,k)
     end
-    GridOccupancy(grid,occupancy,offset)
+    return true
 end
+
 
 abstract type OverapproxModel end
 
@@ -410,44 +414,7 @@ function LazySets.overapproximate(lazy_set,model::HPolytope,epsilon::Float64=0.1
 end
 LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproximate(lazy_set,HPolytope(m),args...)
 
-# Extending overapproximation to types from GeometryBasics
-LazySets.ρ(a::AbstractArray,p::GeometryBasics.Point) = ρ(a,Singleton([p.data...]))
-LazySets.ρ(a::AbstractArray,v::AbstractArray{V,1}) where {V<:GeometryBasics.Point} = minimum(map(x->ρ(a,x),v))
-LazySets.ρ(a::AbstractArray,x::GeometryBasics.Ngon) = ρ(a,coordinates(x))
 
-
-# Distance between sets
-LazySets.distance(a::BallType,b::BallType,p::Real=2.0) = norm(get_center(a)-get_center(b),p) - (get_radius(a)+get_radius(b))
-function LazySets.distance(a::Hyperrectangle,b::Hyperrectangle,p::Real=2.0)
-    m = minkowski_sum(a,b)
-    d = map(h->dot(h.a,get_center(a))-h.b, constraints_list(m))
-    sort!(d;rev=true)
-    idx = findlast(d .> 0.0)
-    if idx === nothing
-        return d[1]
-    else
-        return norm(d[1:idx])
-    end
-end
-distance_lower_bound(a::BallType,b::BallType) = LazySets.distance(a,b)
-distance_lower_bound(a::Hyperrectangle,b::Hyperrectangle) = LazySets.distance(a,b)
-distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(a.geom,b.geom)
-distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
-# distance_lower_bound(a::GeometryCollection,b::GeometryCollection) = minimum(distance_lower_bound(x,y) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
-# LazySets.distance(a::GeometryCollection,b::GeometryCollection,p::Real=2.0) = minimum(LazySets.distance(x,y,p) for (x,y) in Base.Iterators.product(a.geoms,b.geoms))
-
-function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy)
-    if distance_lower_bound(a,b) > 0
-        return false
-    end
-    if isempty(intersection(get_node(a,:Hyperrectangle),get_node(b,:Hyperrectangle)))
-        return false
-    end
-    if isempty(intersection(get_node(a,:Polyhedron),get_node(b,:Polyhedron)))
-        return false
-    end
-    return true
-end
 
 
 """
@@ -557,5 +524,66 @@ function find_collision(table,env_state,env,i,t=0)
     return false, -1
 end
 
+export
+    GridDiscretization,
+    GridOccupancy
+
+struct GridDiscretization{N,T}
+    origin::SVector{N,T}
+    discretization::SVector{N,T}
+end
+get_hyperrectangle(m::GridDiscretization,idxs) = Hyperrectangle(m.origin .+ idxs.*m.discretization, [m.discretization/2...])
+"""
+    cell_indices(m::GridDiscretization,v)
+
+get indices of cell of `m` in which `v` falls
+"""
+cell_indices(m::GridDiscretization,v) = SVector(ceil.(Int,(v .- m.origin .- m.discretization/2)./m.discretization)...)
+struct GridOccupancy{N,T,A<:AbstractArray{Bool,N}}
+    grid::GridDiscretization{N,T}
+    occupancy::A
+    offset::SVector{N,Int}
+end
+GridOccupancy(m::GridDiscretization{N,T},o::AbstractArray) where {N,T} = GridOccupancy(m,o,SVector(zeros(Int,N)...))
+Base.:(+)(o::GridOccupancy,v) = GridOccupancy(o.grid,o.occupancy,SVector(o.offset.+v...))
+Base.:(-)(o::GridOccupancy,v) = o+(-v)
+get_hyperrectangle(m::GridOccupancy,idxs) = get_hyperrectangle(m.grid,idxs .+ m.offset)
+function Base.intersect(o1::G,o2::G) where {G<:GridOccupancy}
+    offset = o2.offset - o1.offset
+    starts = max.(1,offset .+ 1)
+    stops = min.(SVector(size(o1.occupancy)),size(o2.occupancy) .+ offset)
+    idxs = CartesianIndex(starts...):CartesianIndex(stops...)
+    overlap = o1.occupancy[idxs] .* o2.occupancy[idxs .- CartesianIndex(offset...)]
+    G(o1.grid,overlap,o2.offset)
+end
+has_overlap(o1::G,o2::G) where {G<:GridOccupancy} = any(intersect(o1,o2).occupancy)
+LazySets.is_intersection_empty(o1::G,o2::G) where {G<:GridOccupancy} = !has_overlap(o1,o2)
+function LazySets.overapproximate(o::GridOccupancy,::Type{Hyperrectangle})
+    origin = o.grid.origin
+    start = findnext(o.occupancy,CartesianIndex(ones(Int,size(origin))...))
+    finish = findprev(o.occupancy,CartesianIndex(size(o.occupancy)...))
+    s = get_hyperrectangle(o,start.I .- 1)
+    f = get_hyperrectangle(o,finish.I .- 1)
+    ctr = (s.center .+ f.center) / 2
+    radii = (f.center .- s.center .+ o.grid.discretization) / 2
+    Hyperrectangle(ctr ,radii)
+end
+function LazySets.overapproximate(lazy_set,grid::GridDiscretization)
+    rect = overapproximate(lazy_set,Hyperrectangle)
+    starts = LazySets.center(rect) .- radius_hyperrectangle(rect)
+    stops = LazySets.center(rect) .+ radius_hyperrectangle(rect)
+    @show start_idxs = cell_indices(grid,starts)
+    @show stop_idxs = cell_indices(grid,stops)
+    @show offset = SVector(start_idxs...) .- 1
+    occupancy = falses((stop_idxs .- offset)...)
+    approx = GridOccupancy(grid,occupancy,offset)
+    for idx in CartesianIndices(occupancy)
+        r = get_hyperrectangle(approx,[idx.I...])
+        if !is_intersection_empty(lazy_set,r)
+            approx.occupancy[idx] = true
+        end
+    end
+    GridOccupancy(grid,occupancy,offset)
+end
 
 end
