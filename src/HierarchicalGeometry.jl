@@ -13,6 +13,7 @@ using Parameters
 export
     transform,
     transform!,
+    identity_linear_map,
     distance_lower_bound,
     has_overlap
 
@@ -56,18 +57,21 @@ end
     transformed version `g`.
 """
 transform(g::Hyperrectangle,t::CoordinateTransformations.LinearMap) = overapproximate(transform(convert(LazySets.VPolytope,g),t),Hyperrectangle)
-function transform(g::VPolytope,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation}
+function transform(g::VPolytope,t::CoordinateTransformations.LinearMap{R}) where {R}#{R<:Rotation}
     VPolytope(map(v->transform(v,t), vertices_list(g)))
 end
-function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation}
+function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where {R}#{R<:Rotation}
     HPolytope(map(h->transform(h,t), constraints_list(g)))
 end
-function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) where {R<:Rotation,T}
+function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) where {R,T}#{R<:Rotation,T}
     transform(
         transform(g,CoordinateTransformations.LinearMap(t.linear)),
         CoordinateTransformations.Translation(t.translation)
         )
 end
+identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
+identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
+identity_linear_map() = identity_linear_map3()
 
 export
     distance_lower_bound,
@@ -114,10 +118,7 @@ mutable struct TransformNode
     global_transform::CoordinateTransformations.Transformation # transform from the base frame to the child frame
 end
 function TransformNode()
-    TransformNode(
-    CoordinateTransformations.LinearMap(RotZ(0)) ∘ CoordinateTransformations.Translation(0,0,0),
-    CoordinateTransformations.LinearMap(RotZ(0)) ∘ CoordinateTransformations.Translation(0,0,0),
-    )
+    TransformNode(identity_linear_map(),identity_linear_map())
 end
 local_transform(n::TransformNode) = n.local_transform
 global_transform(n::TransformNode) = n.global_transform
@@ -151,7 +152,7 @@ const transform_node_mutator_interface = [:set_local_transform!,:set_global_tran
 
 export
     # TransformTree,
-    change_parent!,
+    set_child!,
     get_parent_transform,
     update_transform_tree!
 
@@ -193,18 +194,21 @@ function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
     return g
 end
 """
-    change_parent!(tree,child,new_parent,new_local_transform)
+    set_child!(tree,parent,child,new_local_transform)
+
+Replace existing edge `old_parent` → `child` with new edge `parent` → `child`.
+Set the `child.local_transform` to `new_local_transform`.
 """
-function change_parent!(tree::AbstractCustomTree,child,parent,
+function set_child!(tree::AbstractCustomTree,parent,child,
         t=relative_transform(global_transform(tree,parent),
             global_transform(tree,child))
     )
     rem_edge!(tree,get_parent(tree,child),child)
     add_edge!(tree,parent,child)
-    @assert !is_cyclic(tree) "transform tree became cyclic when changing $(child) to new parent $(parent)"
+    @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
     set_local_transform!(tree,child,t)
 end
-const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!,:change_parent!]
+const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!]
 
 """
     check_collision(a,b)
@@ -298,7 +302,15 @@ function get_cached_geom(n::GeomNode)
     return get_element(n.cached_geom)
 end
 distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(get_cached_geom(a),get_cached_geom(b))
-
+const geom_node_accessor_interface = [
+    cached_element_accessor_interface...,
+    transform_node_accessor_interface...,
+    :get_base_geom, :get_cached_geom,
+    ]
+const geom_node_mutator_interface = [
+    cached_element_mutator_interface...,
+    transform_node_mutator_interface...
+]
 
 export GeometryHierarchy
 """
@@ -353,12 +365,26 @@ function construct_geometry_tree!(g,geom)
     add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
 end
 
+export
+    AssemblyID,
+    TransportUnitID,
+    SceneNode,
+    RobotNode,
+    ObjectNode,
+    AssemblyNode,
+        components,
+        add_component!,
+    TransportUnitNode,
+        robot_team,
+        add_robot!,
+    SceneTree
+
+const TransformDict{T} = Dict{T,CoordinateTransformations.Transformation}
 """
     abstract type SceneNode end
 
 An Abstract type, of which all nodes in a SceneTree are concrete subtypes.
 """
-abstract type SceneNode end
 @with_kw struct AssemblyID <: AbstractID
     id::Int = -1
 end
@@ -368,6 +394,13 @@ end
 # struct BaseNode <: SceneNode
 #     id::VtxID
 # end
+abstract type SceneNode end
+for op in geom_node_accessor_interface
+    @eval $op(n::SceneNode) = $op(n.geom)
+end
+for op in geom_node_mutator_interface
+    @eval $op(n::SceneNode,val) = $op(n.geom,val)
+end
 struct RobotNode{R} <: SceneNode
     id::BotID{R}
     geom::GeomNode
@@ -376,17 +409,33 @@ struct ObjectNode <: SceneNode
     id::ObjectID
     geom::GeomNode
 end
+has_component(n::SceneNode,id) = false
 struct AssemblyNode <: SceneNode
     id::AssemblyID
     geom::GeomNode
-    components::Vector{Pair{ObjectID,CoordinateTransformations.Transformation}}
+    components::TransformDict{Union{ObjectID,AssemblyID}}
 end
+AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}())
+components(n::AssemblyNode) = n.components
+add_component!(n::AssemblyNode,p) = push!(n.components,p)
+has_component(n::AssemblyNode,id) = haskey(components(n),id)
+child_transform(n::AssemblyNode,id) = components(n)[id]
 struct TransportUnitNode <: SceneNode
     id::TransportUnitID
     geom::GeomNode
     assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
-    robots::Vector{Pair{BotID,CoordinateTransformations.Transformation}}
+    robots::TransformDict{BotID}
 end
+TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}())
+TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
+robot_team(n::TransportUnitNode) = n.robots
+assembly_id(n::TransportUnitNode) = n.assembly.first
+has_component(n::TransportUnitNode,id::AssemblyID) = id == assembly_id(n)
+has_component(n::TransportUnitNode,id::BotID) = haskey(robot_team(n),id)
+child_transform(n::TransportUnitNode,id::AssemblyID) = n.assembly.second
+child_transform(n::TransportUnitNode,id::BotID) = robot_team(n)[id]
+add_robot!(n::TransportUnitNode,p) = push!(robot_team(n),p)
+add_robot!(n::TransportUnitNode,r,t) = add_robot!(n,r=>t)
 """
     SceneTree
 
@@ -399,6 +448,24 @@ A tree data structure for describing the state of a manufacturing project.
     nodes               ::Vector{SceneNode}     = Vector{SceneNode}()
     vtx_map             ::Dict{AbstractID,Int}  = Dict{AbstractID,Int}()
     vtx_ids             ::Vector{AbstractID}    = Vector{AbstractID}()
+end
+GraphUtils.add_node!(tree::SceneTree,node::SceneNode) = add_node!(tree,node,node.id)
+GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,n.id)
+
+set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,parent.id,args...)
+set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,child.id,args...)
+"""
+    set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
+
+Only eligible children can be added to a candidate parent in a `SceneTree`.
+Eligible edges are those for which the child node is listed in the components of
+the parent. `ObjectNode`s and `RobotNode`s may not have any children.
+"""
+function set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
+    node = get_node(tree,parent)
+    @assert has_component(node,child) "$(get_node(tree,child)) cannot be a child of $(node)"
+    t = child_transform(node,child)
+    set_child!(tree,parent,get_vtx(tree,child),t)
 end
 
 ### Collision Table
