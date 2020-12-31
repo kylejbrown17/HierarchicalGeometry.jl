@@ -52,8 +52,8 @@ let
     @test is_intersection_empty(occupancy,occupancy+8)
 end
 let
-    a = GeomNode(Hyperrectangle([0.0,0.0],[1.0,1.0]))
-    b = GeomNode(Hyperrectangle([3.0,0.0],[1.0,1.0]))
+    a = GeomNode(Hyperrectangle([0.0,0.0,0.0],[1.0,1.0,1.0]))
+    b = GeomNode(Hyperrectangle([3.0,0.0,0.0],[1.0,1.0,1.0]))
     @test isapprox(HierarchicalGeometry.distance_lower_bound(a,b), 1.0)
 end
 # let

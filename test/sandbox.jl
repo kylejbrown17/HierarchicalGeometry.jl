@@ -7,7 +7,8 @@ using CoordinateTransformations
 using Rotations
 using StaticArrays
 using MeshCat
-using Meshing
+using LinearAlgebra
+# using Meshing
 using Colors
 using Test
 

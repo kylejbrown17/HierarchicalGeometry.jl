@@ -64,30 +64,49 @@ let
 end
 # Test Transform Tree
 let
-    tree = HierarchicalGeometry.TransformTree{Symbol}()
-    root = HierarchicalGeometry.TransformNode()
+    # tree = TransformTree{Symbol}()
+    tree = GraphUtils.CustomTree{TransformNode,Symbol}()
+    root = TransformNode()
     add_node!(tree,root,:ONE)
     GraphUtils.add_child!(tree,deepcopy(root),:TWO,:ONE)
     GraphUtils.add_child!(tree,deepcopy(root),:THREE,:TWO)
-    a = HierarchicalGeometry.get_parent_transform(tree,:ONE)
-    b = HierarchicalGeometry.local_transform(tree,:ONE)
-
     t = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
     for v in LightGraphs.vertices(tree)
-        n = get_node(tree,v)
-        HierarchicalGeometry.set_local_transform!(n,t)
+        set_local_transform!(get_node(tree,v),t) # Not connected to tree, so can't globally update
     end
     for v in LightGraphs.vertices(tree)
-        n = get_node(tree,v)
-        data = [HierarchicalGeometry.global_transform(n).translation.data...]
+        data = [global_transform(tree,v).translation.data...]
         @test array_isapprox(data,[0.0, 0.0, 0.0])
     end
-    HierarchicalGeometry.update_transform_tree!(tree,:ONE)
+    update_transform_tree!(tree,:ONE)
     for v in LightGraphs.vertices(tree)
-        n = get_node(tree,v)
-        data = [HierarchicalGeometry.global_transform(n).translation.data...]
+        data = [global_transform(tree,v).translation.data...]
         @test array_isapprox(data,[v,0.0,0.0])
     end
+end
+let
+    # tree = TransformTree{Symbol}()
+    tree = GraphUtils.CustomTree{TransformNode,Symbol}()
+    root = TransformNode()
+    add_node!(tree,root,:ONE)
+    GraphUtils.add_child!(tree,deepcopy(root),:TWO,:ONE)
+    GraphUtils.add_child!(tree,deepcopy(root),:THREE,:ONE)
+    t = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+    for v in LightGraphs.vertices(tree)
+        set_local_transform!(tree,v,t)
+    end
+    @test array_isapprox([global_transform(tree,:ONE).translation.data...],[1.0,0,0])
+    @test array_isapprox([global_transform(tree,:TWO).translation.data...],[2.0,0,0])
+    @test array_isapprox([global_transform(tree,:THREE).translation.data...],[2.0,0,0])
+    change_parent!(tree,:THREE,:TWO)
+    @test has_edge(tree,:TWO,:THREE)
+    @test !has_edge(tree,:ONE,:THREE)
+    for v in LightGraphs.vertices(tree)
+        set_local_transform!(tree,v,t)
+    end
+    @test array_isapprox([global_transform(tree,:ONE).translation.data...],[1.0,0,0])
+    @test array_isapprox([global_transform(tree,:TWO).translation.data...],[2.0,0,0])
+    @test array_isapprox([global_transform(tree,:THREE).translation.data...],[3.0,0,0])
 end
 # Test CachedElement
 let
@@ -117,10 +136,10 @@ end
 # relative transformations
 let
     a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0.0)))
-    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotZ(0.5*π)))
+    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotZ(0.75*π)))
     rot_err = Rotations.rotation_error(a,b)
     t = HierarchicalGeometry.relative_transform(a,b)
-    @test array_isapprox(t.linear,b.linear;rtol=1e-12,atol=1e-12)
+    @test array_isapprox(inv(t.linear),b.linear;rtol=1e-12,atol=1e-12)
 
     a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotXYZ(0.0,0.0,0.0)))
     b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotXYZ(0.1,0.0,1.0*π)))
