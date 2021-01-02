@@ -9,6 +9,7 @@ using CoordinateTransformations
 using Rotations
 using LightGraphs, GraphUtils
 using Parameters
+using Logging
 
 export
     transform,
@@ -73,6 +74,26 @@ identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVec
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map() = identity_linear_map3()
 
+"""
+    relative_transform(a::AffineMap,b::AffineMap)
+
+compute the relative transform between two frames, ᵂT𝐀 and ᵂT𝐁.
+"""
+function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
+    pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
+    rot_err = Rotations.rotation_error(a,b,error_map)
+    q = UnitQuaternion(rot_err)
+    t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
+end
+function Rotations.rotation_error(
+    a::CoordinateTransformations.AffineMap,
+    b::CoordinateTransformations.AffineMap,
+    error_map=MRPMap())
+    rot_err = Rotations.rotation_error(
+        UnitQuaternion(a.linear),
+        UnitQuaternion(b.linear),error_map)
+end
+
 export
     distance_lower_bound,
     has_overlap
@@ -105,110 +126,6 @@ for op in [:distance_lower_bound,:(LazySets.distance)]
     @eval $op(a::GeometryCollection,b) = minimum($op(x,b) for x in a.elements)
     @eval $op(a::GeometryCollection,b::GeometryCollection) = minimum($op(a,y) for y in b.elements)
 end
-
-export
-    TransformNode,
-    local_transform,
-    global_transform,
-    set_local_transform!,
-    set_global_transform!
-
-mutable struct TransformNode
-    local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
-    global_transform::CoordinateTransformations.Transformation # transform from the base frame to the child frame
-end
-function TransformNode()
-    TransformNode(identity_linear_map(),identity_linear_map())
-end
-local_transform(n::TransformNode) = n.local_transform
-global_transform(n::TransformNode) = n.global_transform
-function set_local_transform!(n::TransformNode,t)
-    n.local_transform = t
-end
-function set_global_transform!(n::TransformNode,t)
-    n.global_transform = t
-end
-"""
-    relative_transform(a::AffineMap,b::AffineMap)
-
-compute the relative transform between two frames, ᵂT𝐀 and ᵂT𝐁.
-"""
-function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
-    pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
-    rot_err = Rotations.rotation_error(a,b,error_map)
-    q = UnitQuaternion(rot_err)
-    t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
-end
-function Rotations.rotation_error(
-    a::CoordinateTransformations.AffineMap,
-    b::CoordinateTransformations.AffineMap,
-    error_map=MRPMap())
-    rot_err = Rotations.rotation_error(
-        UnitQuaternion(a.linear),
-        UnitQuaternion(b.linear),error_map)
-end
-const transform_node_accessor_interface = [:local_transform,:global_transform]
-const transform_node_mutator_interface = [:set_local_transform!,:set_global_transform!]
-
-export
-    # TransformTree,
-    set_child!,
-    get_parent_transform,
-    update_transform_tree!
-
-# @with_kw struct TransformTree{ID} <: AbstractCustomTree{TransformNode,ID}
-#     graph               ::DiGraph               = DiGraph()
-#     nodes               ::Vector{TransformNode} = Vector{TransformNode}()
-#     vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
-#     vtx_ids             ::Vector{ID}            = Vector{ID}()
-# end
-for op in transform_node_accessor_interface
-    @eval $op(g::AbstractCustomTree,v) = $op(get_node(g,v))
-end
-function get_parent_transform(g::AbstractCustomTree,v)
-    vp = get_parent(g,v)
-    if has_vertex(g,vp)
-        return global_transform(get_node(g,vp))
-    end
-    return global_transform(TransformNode())
-end
-"""
-    update_transform_tree!(g::TransformTree,v)
-
-Updates the global transforms of `v` and its successors based on their local
-transforms.
-"""
-function update_transform_tree!(g::AbstractCustomTree,v)
-    n = get_node(g,v)
-    set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
-    for vp in outneighbors(g,v)
-        update_transform_tree!(g,vp)
-    end
-    return g
-end
-function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
-    set_local_transform!(get_node(g,v),t)
-    if update
-        update_transform_tree!(g,v)
-    end
-    return g
-end
-"""
-    set_child!(tree,parent,child,new_local_transform)
-
-Replace existing edge `old_parent` → `child` with new edge `parent` → `child`.
-Set the `child.local_transform` to `new_local_transform`.
-"""
-function set_child!(tree::AbstractCustomTree,parent,child,
-        t=relative_transform(global_transform(tree,parent),
-            global_transform(tree,child))
-    )
-    rem_edge!(tree,get_parent(tree,child),child)
-    add_edge!(tree,parent,child)
-    @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
-    set_local_transform!(tree,child,t)
-end
-const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!]
 
 """
     check_collision(a,b)
@@ -258,8 +175,6 @@ function update_element!(n::CachedElement,g)
     set_up_to_date!(n,true)
     return g
 end
-# accessor_interface(::Type{CachedElement}) = [:is_up_to_date]
-# mutator_interface(::Type{CachedElement}) = [:set_computed_geometry!,:set_up_to_date!]
 const cached_element_accessor_interface = [:is_up_to_date]
 const cached_element_mutator_interface = [:update_element!,:set_element!,:set_up_to_date!]
 """
@@ -269,6 +184,142 @@ Shares the e.element, since it doesn't need to be replaced until `set_element!`
 is called. Copies `e.is_up_to_date` to preserve the cache state.
 """
 Base.copy(e::CachedElement) = CachedElement(e.element,copy(is_up_to_date(e)))
+Base.convert(::Type{CachedElement{T}},e::CachedElement) where {T} = CachedElement{T}(get_element(e),is_up_to_date(e))
+
+
+export
+    TransformNode,
+    local_transform,
+    global_transform,
+    set_local_transform!,
+    set_global_transform!
+
+mutable struct TransformNode
+    local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
+    global_transform::CachedElement{CoordinateTransformations.Transformation}
+end
+tf_up_to_date(n::TransformNode) = is_up_to_date(n.global_transform)
+set_tf_up_to_date!(n::TransformNode,val) = set_up_to_date!(n.global_transform,val)
+function TransformNode()
+    TransformNode(identity_linear_map(),CachedElement(identity_linear_map()))
+end
+function TransformNode(
+    a::CoordinateTransformations.Transformation,
+    b::CoordinateTransformations.Transformation
+    )
+    TransformNode(a,CachedElement(b))
+end
+local_transform(n::TransformNode) = n.local_transform
+function global_transform(n::TransformNode)
+    if !is_up_to_date(n.global_transform)
+        @warn string("global_transform out of date!",
+        " Update with set_global_transform!(n,tf)")
+    end
+    return get_element(n.global_transform)
+end
+function set_local_transform!(n::TransformNode,t)
+    n.local_transform = t
+end
+function set_global_transform!(n::TransformNode,t)
+    update_element!(n.global_transform,t)
+    return t
+end
+const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
+const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!]
+
+export
+    # TransformTree,
+    set_child!,
+    get_parent_transform,
+    update_transform_tree!
+
+# @with_kw struct TransformTree{ID} <: AbstractCustomTree{TransformNode,ID}
+#     graph               ::DiGraph               = DiGraph()
+#     nodes               ::Vector{TransformNode} = Vector{TransformNode}()
+#     vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
+#     vtx_ids             ::Vector{ID}            = Vector{ID}()
+# end
+tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,n))
+local_transform(tree,v) = local_transform(get_node(tree,n))
+function get_parent_transform(g::AbstractCustomTree,v)
+    vp = get_parent(g,v)
+    if has_vertex(g,vp)
+        return global_transform(g,vp)
+    end
+    # @warn string("Node $v has no parent.",
+    # " Returning identity_linear_map() as parent transform")
+    return identity_linear_map()
+end
+"""
+    global_transform(tree,v)
+
+Return global transform of node `v` in `tree`. If the current global transform
+is out of date, backtrack until `v` and all of its ancestors are up to date.
+"""
+function global_transform(tree,v)
+    n = get_node(tree,v)
+    if !tf_up_to_date(n)
+        set_global_transform!(n,get_parent_transform(tree,v) ∘ local_transform(n))
+    end
+    return global_transform(n)
+end
+"""
+    update_transform_tree!(g::TransformTree,v)
+
+Updates the global transforms of `v` and its successors based on their local
+transforms.
+"""
+function update_transform_tree!(g::AbstractCustomTree,v)
+    n = get_node(g,v)
+    set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
+    for vp in outneighbors(g,v)
+        update_transform_tree!(g,vp)
+    end
+    return g
+end
+"""
+    propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
+
+Calls `set_tf_up_to_date!(get_node(g,vp),val)` on v and all outneighbors thereof.
+Needs to be called by `set_local_transform!(g, ...)` unless
+`update_transform_tree!(g, ...)` is called instead.
+"""
+function propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
+    n = get_node(g,v)
+    if tf_up_to_date(n)
+        return g
+    end
+    set_tf_up_to_date!(n,val) # Mark as
+    for vp in outneighbors(g,v)
+        propagate_tf_flag!(g,vp,val)
+    end
+    return g
+end
+function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
+    set_local_transform!(get_node(g,v),t)
+    if update
+        update_transform_tree!(g,v)
+    else
+        propagate_tf_flag!(g,v,false)
+    end
+    return g
+end
+"""
+    set_child!(tree,parent,child,new_local_transform)
+
+Replace existing edge `old_parent` → `child` with new edge `parent` → `child`.
+Set the `child.local_transform` to `new_local_transform`.
+"""
+function set_child!(tree::AbstractCustomTree,parent,child,
+        t=relative_transform(global_transform(tree,parent),
+            global_transform(tree,child))
+    )
+    rem_edge!(tree,get_parent(tree,child),child)
+    add_edge!(tree,parent,child)
+    @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
+    set_local_transform!(tree,child,t)
+end
+const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!]
 
 export
     GeomNode,
@@ -293,18 +344,39 @@ end
 for op in transform_node_accessor_interface
     @eval $op(g::GeomNode) = $op(g.transform_node)
 end
+set_tf_up_to_date!(n::GeomNode,val) = set_tf_up_to_date!(n.transform_node,val)
 function set_local_transform!(n::GeomNode,t)
-    set_local_transform!(n.transform_node,t)
     set_up_to_date!(n,false)
+    set_local_transform!(n.transform_node,t)
 end
 function set_global_transform!(n::GeomNode,t)
-    set_global_transform!(n.transform_node,t)
     set_up_to_date!(n,false)
+    set_global_transform!(n.transform_node,t)
 end
+"""
+    get_cached_geom(n::GeomNode)
+
+If `n.cached_geom` is out of date, transform it according to
+`global_transform(n)`. Note that nothing can be done if `global_transform(n)` is
+out of date, since this function call doesn't include the tree.
+"""
 function get_cached_geom(n::GeomNode)
-    # TODO implement a version of this that includes the Tree, not just the node
     if !is_up_to_date(n)
         transformed_geom = transform(get_base_geom(n),global_transform(n))
+        update_element!(n,transformed_geom)
+    end
+    return get_element(n.cached_geom)
+end
+"""
+    get_cached_geom(tree,v)
+
+returns the cached geometry associated with vertex `v`, updating both the
+global transform and geometry if necessary.
+"""
+function get_cached_geom(tree,v)
+    n = get_node(tree,v)
+    if !is_up_to_date(n)
+        transformed_geom = transform(get_base_geom(n),global_transform(tree,v))
         update_element!(n,transformed_geom)
     end
     return get_element(n.cached_geom)

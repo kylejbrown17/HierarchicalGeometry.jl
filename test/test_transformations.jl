@@ -83,11 +83,22 @@ let
         GraphUtils.add_child!(tree,:ONE,deepcopy(root),:TWO)
         GraphUtils.add_child!(tree,:TWO,deepcopy(root),:THREE)
         t = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+        tree2 = deepcopy(tree) # Test deferred computation of transformations
+        tree3 = deepcopy(tree) # Test deferred computation of transformations
         for v in LightGraphs.vertices(tree)
             set_local_transform!(get_node(tree,v),t) # Not connected to tree, so can't globally update
+            set_local_transform!(tree2,v,t,true) # update successors immediately
+            set_local_transform!(tree3,v,t,false) # defer update of predecessors
         end
         for v in LightGraphs.vertices(tree)
-            @test array_isapprox(global_transform(tree,v).translation,[0.0, 0.0, 0.0])
+            # Global transform not updated because query does not include tree. Should throw warning
+            @test array_isapprox(global_transform(get_node(tree,v)).translation,[0.0, 0.0, 0.0])
+        end
+        for v in LightGraphs.vertices(tree)
+            # Now transforms will be updated because query is made with tree
+            @test array_isapprox(global_transform(tree,v).translation,[v, 0.0, 0.0])
+            @test array_isapprox(global_transform(tree2,v).translation,[v, 0.0, 0.0])
+            @test array_isapprox(global_transform(tree3,v).translation,[v, 0.0, 0.0])
         end
         update_transform_tree!(tree,:ONE)
         for v in LightGraphs.vertices(tree)
