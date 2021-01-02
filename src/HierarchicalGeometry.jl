@@ -302,6 +302,7 @@ function set_global_transform!(n::GeomNode,t)
     set_up_to_date!(n,false)
 end
 function get_cached_geom(n::GeomNode)
+    # TODO implement a version of this that includes the Tree, not just the node
     if !is_up_to_date(n)
         transformed_geom = transform(get_base_geom(n),global_transform(n))
         update_element!(n,transformed_geom)
@@ -482,6 +483,14 @@ A tree data structure for describing the state of a manufacturing project.
 end
 GraphUtils.add_node!(tree::SceneTree,node::SceneNode) = add_node!(tree,node,node.id)
 GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,n.id)
+function Base.copy(tree::SceneTree)
+    SceneTree(
+        graph = deepcopy(tree.graph),
+        nodes = map(copy, tree.nodes),
+        vtx_map = deepcopy(tree.vtx_map), # TODO would a shallow copy be fine?
+        vtx_ids = deepcopy(tree.vtx_ids) # TODO would a shallow copy be fine?
+    )
+end
 
 set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,parent.id,args...)
 set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,child.id,args...)

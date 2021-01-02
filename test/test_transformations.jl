@@ -51,6 +51,7 @@ let
 
     # Combined
     a = compose(t,r) # Rotate first, then translate
+    # a = compose(r,t) # Rotate first, then translate
     @test array_isapprox(transform(ball.center,a),transform(ball,a).center)
     @test isapprox(ball.radius,transform(ball,a).radius)
     @test array_isapprox(transform(bbox.center,a),transform(bbox,a).center)
@@ -156,27 +157,43 @@ let
     for v in LightGraphs.vertices(tree)
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
+
+    # test copy behavior of nodes only
+    set_local_transform!(tree,TransportUnitID(1),identity_linear_map())
+    base_tree = tree
+    t = CoordinateTransformations.Translation(1.0,0.0,0.0)
+    tree = deepcopy(base_tree)
+    for v in LightGraphs.vertices(tree)
+        n = get_node(tree,v)
+        set_up_to_date!(n,true)
+        n2 = copy(n) # Compare to a copy that's still attached to the tree
+        n3 = copy(n) # Compare to a copy that's not attached to the tree
+        set_up_to_date!(n,false)
+        set_up_to_date!(n3,false)
+        @test is_up_to_date(n2)
+        @test is_up_to_date(n) != is_up_to_date(n2)
+        @test is_up_to_date(n3) != is_up_to_date(n2)
+        tn = t ∘ global_transform(n)
+        set_global_transform!(n,tn)
+        set_global_transform!(n3,tn)
+        @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
+        @test isapprox(norm(get_cached_geom(n3).center - get_cached_geom(n2).center),norm(t.translation))
+    end
+
+    tree = copy(base_tree)
+    for v in LightGraphs.vertices(tree)
+        n = get_node(base_tree,v)
+        n2 = get_node(tree,v)
+        tn = t ∘ local_transform(n)
+        set_local_transform!(base_tree,n,tn)
+        @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
+    end
+
 end
 # test copy(::SceneNode)
 let
     geom = GeomNode(Ball2(zeros(3),1.0))
     t = CoordinateTransformations.Translation(1.0,0.0,0.0)
-
-    for n in [
-            RobotNode(RobotID(1),deepcopy(geom)),
-            ObjectNode(ObjectID(1),deepcopy(geom)),
-            AssemblyNode(AssemblyID(1),deepcopy(geom)),
-            TransportUnitNode(1,deepcopy(geom),AssemblyID(1))
-        ]
-        set_up_to_date!(n,true)
-        n2 = copy(n)
-        set_up_to_date!(n,false)
-        @test is_up_to_date(n2)
-        # set_up_to_date!(n2,true)
-        @test is_up_to_date(n) != is_up_to_date(n2)
-        set_global_transform!(n,global_transform(n) ∘ t)
-        @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
-    end
 
     n = AssemblyNode(AssemblyID(1),deepcopy(geom))
     add_component!(n, ObjectID(1)=>identity_linear_map())
