@@ -262,6 +262,13 @@ end
 # mutator_interface(::Type{CachedElement}) = [:set_computed_geometry!,:set_up_to_date!]
 const cached_element_accessor_interface = [:is_up_to_date]
 const cached_element_mutator_interface = [:update_element!,:set_element!,:set_up_to_date!]
+"""
+    Base.copy(e::CachedElement)
+
+Shares the e.element, since it doesn't need to be replaced until `set_element!`
+is called. Copies `e.is_up_to_date` to preserve the cache state.
+"""
+Base.copy(e::CachedElement) = CachedElement(e.element,copy(is_up_to_date(e)))
 
 export
     GeomNode,
@@ -311,6 +318,17 @@ const geom_node_mutator_interface = [
     cached_element_mutator_interface...,
     transform_node_mutator_interface...
 ]
+"""
+    Base.copy(n::GeomNode)
+
+Shares `n.base_geom`, deepcopies `n.transform_node`, and copies `n.cached_geom`
+(see documenation for `Base.copy(::CachedElement)`).
+"""
+Base.copy(n::GeomNode) = GeomNode(
+    n.base_geom,
+    deepcopy(n.transform_node),
+    copy(n.cached_geom)
+)
 
 export GeometryHierarchy
 """
@@ -401,20 +419,32 @@ end
 for op in geom_node_mutator_interface
     @eval $op(n::SceneNode,val) = $op(n.geom,val)
 end
+"""
+    Base.copy(n::N) where {N<:SceneNode}
+
+Shares `n.base_geom`, deepcopies `n.transform_node`, and copies `n.cached_geom`
+(see documenation for `Base.copy(::CachedElement)`).
+"""
+Base.copy(n::N) where {N<:SceneNode} = N(n,copy(n.geom))
+
 struct RobotNode{R} <: SceneNode
     id::BotID{R}
     geom::GeomNode
 end
+RobotNode{R}(n::RobotNode,geom::GeomNode) where {R} = RobotNode(n.id,geom)
+RobotNode(n::RobotNode,geom::GeomNode) = RobotNode(n.id,geom)
 struct ObjectNode <: SceneNode
     id::ObjectID
     geom::GeomNode
 end
+ObjectNode(n::ObjectNode,geom::GeomNode) = ObjectNode(n.id,geom)
 has_component(n::SceneNode,id) = false
 struct AssemblyNode <: SceneNode
     id::AssemblyID
     geom::GeomNode
     components::TransformDict{Union{ObjectID,AssemblyID}}
 end
+AssemblyNode(n::AssemblyNode,geom::GeomNode) = AssemblyNode(n.id,geom,n.components)
 AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}())
 components(n::AssemblyNode) = n.components
 add_component!(n::AssemblyNode,p) = push!(n.components,p)
@@ -426,6 +456,7 @@ struct TransportUnitNode <: SceneNode
     assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
     robots::TransformDict{BotID}
 end
+TransportUnitNode(n::TransportUnitNode,geom::GeomNode) = TransportUnitNode(n.id,geom,n.assembly,n.robots)
 TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}())
 TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
 robot_team(n::TransportUnitNode) = n.robots

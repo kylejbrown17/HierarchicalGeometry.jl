@@ -144,7 +144,7 @@ let
     @test_throws AssertionError set_child!(tree,RobotID(1),ObjectID(1))
     @test_throws AssertionError set_child!(tree,TransportUnitID(1),ObjectID(1))
     @test_throws AssertionError set_child!(tree,AssemblyID(1),RobotID(1))
-    
+
     set_child!(tree,AssemblyID(1),ObjectID(1))
     @test has_edge(tree,AssemblyID(1),ObjectID(1))
     set_child!(tree,TransportUnitID(1),RobotID(1))
@@ -156,4 +156,45 @@ let
     for v in LightGraphs.vertices(tree)
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
+end
+# test copy(::SceneNode)
+let
+    geom = GeomNode(Ball2(zeros(3),1.0))
+    t = CoordinateTransformations.Translation(1.0,0.0,0.0)
+
+    for n in [
+            RobotNode(RobotID(1),deepcopy(geom)),
+            ObjectNode(ObjectID(1),deepcopy(geom)),
+            AssemblyNode(AssemblyID(1),deepcopy(geom)),
+            TransportUnitNode(1,deepcopy(geom),AssemblyID(1))
+        ]
+        set_up_to_date!(n,true)
+        n2 = copy(n)
+        set_up_to_date!(n,false)
+        @test is_up_to_date(n2)
+        # set_up_to_date!(n2,true)
+        @test is_up_to_date(n) != is_up_to_date(n2)
+        set_global_transform!(n,global_transform(n) ∘ t)
+        @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
+    end
+
+    n = AssemblyNode(AssemblyID(1),deepcopy(geom))
+    add_component!(n, ObjectID(1)=>identity_linear_map())
+    n2 = copy(n)
+    components(n)[ObjectID(1)] = identity_linear_map() ∘ t
+    # AssemblyNode compondents should be shared
+    @test isapprox(
+        norm(HierarchicalGeometry.child_transform(n,ObjectID(1)).translation
+        - HierarchicalGeometry.child_transform(n2,ObjectID(1)).translation),
+        0.0)
+
+    n = TransportUnitNode(1,deepcopy(geom),AssemblyID(1))
+    add_robot!(n,RobotID(1)=>identity_linear_map())
+    n2 = copy(n)
+    add_robot!(n2,RobotID(1)=>identity_linear_map() ∘ t)
+    # TransformNode compondents and assembly should be shared
+    @test isapprox(
+        norm(HierarchicalGeometry.child_transform(n,RobotID(1)).translation
+        - HierarchicalGeometry.child_transform(n2,RobotID(1)).translation),
+        0.0)
 end
