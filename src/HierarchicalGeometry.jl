@@ -5,11 +5,16 @@ using LinearAlgebra
 using Polyhedra
 using LazySets
 using GeometryBasics
+# using RigidBodyDynamics
 using CoordinateTransformations
 using Rotations
 using LightGraphs, GraphUtils
 using Parameters
 using Logging
+
+# TODO convert RigidBodyDynamics.CartesianFrame3D to CoordinateTransformations.Transformation
+# TODO add RigidBodyDynamics.Mechanism(s) to SceneTree
+# TODO replace TransformNode with RigidBodyDynamics equivalent. Each SceneNode should have a RigidBody included in it.
 
 export
     transform,
@@ -233,7 +238,7 @@ export
     get_parent_transform,
     update_transform_tree!
 
-# @with_kw struct TransformTree{ID} <: AbstractCustomTree{TransformNode,ID}
+# @with_kw struct TransformTree{ID} <: AbstractCustomNTree{TransformNode,ID}
 #     graph               ::DiGraph               = DiGraph()
 #     nodes               ::Vector{TransformNode} = Vector{TransformNode}()
 #     vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
@@ -241,7 +246,7 @@ export
 # end
 tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,n))
 local_transform(tree,v) = local_transform(get_node(tree,n))
-function get_parent_transform(g::AbstractCustomTree,v)
+function get_parent_transform(g::AbstractCustomNTree,v)
     vp = get_parent(g,v)
     if has_vertex(g,vp)
         return global_transform(g,vp)
@@ -269,7 +274,7 @@ end
 Updates the global transforms of `v` and its successors based on their local
 transforms.
 """
-function update_transform_tree!(g::AbstractCustomTree,v)
+function update_transform_tree!(g::AbstractCustomNTree,v)
     n = get_node(g,v)
     set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
     for vp in outneighbors(g,v)
@@ -278,13 +283,13 @@ function update_transform_tree!(g::AbstractCustomTree,v)
     return g
 end
 """
-    propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
+    propagate_tf_flag!(g::AbstractCustomNTree,v,val=false)
 
 Calls `set_tf_up_to_date!(get_node(g,vp),val)` on v and all outneighbors thereof.
 Needs to be called by `set_local_transform!(g, ...)` unless
 `update_transform_tree!(g, ...)` is called instead.
 """
-function propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
+function propagate_tf_flag!(g::AbstractCustomNTree,v,val=false)
     n = get_node(g,v)
     if tf_up_to_date(n)
         return g
@@ -295,7 +300,7 @@ function propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
     end
     return g
 end
-function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
+function set_local_transform!(g::AbstractCustomNTree,v,t,update=true)
     set_local_transform!(get_node(g,v),t)
     if update
         update_transform_tree!(g,v)
@@ -310,7 +315,7 @@ end
 Replace existing edge `old_parent` → `child` with new edge `parent` → `child`.
 Set the `child.local_transform` to `new_local_transform`.
 """
-function set_child!(tree::AbstractCustomTree,parent,child,
+function set_child!(tree::AbstractCustomNTree,parent,child,
         t=relative_transform(global_transform(tree,parent),
             global_transform(tree,child))
     )
@@ -412,7 +417,7 @@ Fields:
 * graph - encodes the hierarchy of geometries
 * nodes - geometry nodes
 """
-@with_kw struct GeometryHierarchy <: AbstractCustomTree{GeomNode,Symbol}
+@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,Symbol}
     graph               ::DiGraph               = DiGraph()
     nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
     vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
@@ -547,7 +552,7 @@ A tree data structure for describing the state of a manufacturing project.
 `AssemblyNode`s define how objects/subassemblies fit together, and
 `TransportUnitNode` define how robots fit together to form a transport team.
 """
-@with_kw struct SceneTree <: AbstractCustomTree{SceneNode,AbstractID}
+@with_kw struct SceneTree <: AbstractCustomNTree{SceneNode,AbstractID}
     graph               ::DiGraph               = DiGraph()
     nodes               ::Vector{SceneNode}     = Vector{SceneNode}()
     vtx_map             ::Dict{AbstractID,Int}  = Dict{AbstractID,Int}()
@@ -585,7 +590,7 @@ const CollisionStack = Dict{Int,Set{ID}} where {ID}
 get_active_collision_ids(c::CollisionStack,t::Int) = get(c,t,valtype(c)())
 
 """
-    CollisionTable <: AbstractCustomGraph{Graph,CollisionStack,I}
+    CollisionTable <: AbstractCustomNGraph{Graph,CollisionStack,I}
 
 A Data structure for efficient discrete-time collision checking between large
     numbers of objects.
@@ -596,7 +601,7 @@ track of when collision checking needs to be performed between two objects.
 The timing depends on the distance between the objects at a given time step, as
 well as the maximum feasible speed of each object.
 """
-@with_kw struct CollisionTable{ID} <: AbstractCustomGraph{Graph,CollisionStack{ID},ID}
+@with_kw struct CollisionTable{ID} <: AbstractCustomNGraph{Graph,CollisionStack{ID},ID}
     graph               ::Graph                 = Graph()
     nodes               ::Vector{CollisionStack{ID}} = Vector{CollisionStack{ID}}()
     vtx_map             ::Dict{ID,Int}           = Dict{ID,Int}()

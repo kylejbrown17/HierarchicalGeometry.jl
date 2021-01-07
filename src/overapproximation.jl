@@ -176,3 +176,89 @@ function LazySets.overapproximate(lazy_set,grid::GridDiscretization)
     end
     GridOccupancy(grid,occupancy,offset)
 end
+
+# select robot carry locations
+"""
+    maximally_spaced_neighbors(pts,n::Int)
+
+return the indices of the `n` maximally spaced neighbors along the edges of a
+polygon.
+"""
+function maximally_spaced_neighbors(polygon,n::Int,aggregator=sum,ϵ=1e-8)
+    pts = vertices_list(polygon)
+    @assert length(pts) >= n
+    if length(pts) == n
+        return collect(1:n)
+    end
+    D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
+    d = (D,idxs)->aggregator(map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs)))
+    best_idxs = SVector{n,Int}(collect(1:n)...)
+    d_hi = d(D,best_idxs)
+    idx_list = [best_idxs]
+    while true
+        updated = false
+        for deltas in Base.Iterators.product(map(i->(-1,0,1),1:n)...)
+            idxs = sort(map(i->wrap_idx(length(pts),i),best_idxs .+ deltas))
+            if length(unique(idxs)) == n
+                dv = map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs))
+                if d(D,idxs) > d_hi + ϵ
+                    best_idxs = map(i->wrap_idx(length(pts),i),idxs)
+                    d_hi = d(D,idxs)
+                    @show best_idxs, d_hi
+                    push!(idx_list,best_idxs)
+                    updated = true
+                end
+            end
+        end
+        if !updated
+            break
+        end
+    end
+    return best_idxs, d_hi, idx_list
+end
+function extremal_points(pts)
+    D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
+    val, idx = findmax(D)
+    return val, idx.I
+end
+proj_to_line(v,vec) = vec*dot(v,vec)/(norm(vec)^2)
+function proj_to_line_between_points(p,p1,p2)
+    v = p.-p1
+    vec = normalize(p2-p1)
+    p1 .+ proj_to_line(v,vec)
+end
+"""
+    select_support_locations(geom,transport_model)
+
+Given some arbitrary 3D geometry, select a set of locations to support it from
+beneath
+"""
+function select_support_locations(geom,transport_model)
+    r       = transport_model.robot_radius
+    a_r_max = transport_model.max_area_per_robot
+    a_r_min = transport_model.min_area_per_robot
+    v_r_max = transport_model.max_volume_per_robot
+    v_r_min = transport_model.min_volume_per_robot
+
+    zvec = SVector{3,Float64}(0,0,1)
+    proj_mat = one(SMatrix{3,3,Float64})[1:2,1:3]
+    polygon = VPolygon(convex_hull(map(v->proj_mat*v,vertices_list(geom))))
+    # height
+    H = maximum(map(v->sum(dot(v,zvec))),vertices_list(geom))
+    # area
+    A = LazySets.area(polygon)
+    pts = vertices_list(polygon)
+    # length
+    L, (i,j) = extremal_points(pts)
+    # width
+    p1 = pts[i]
+    p2 = pts[j]
+    vecs = map(p->p.-p1,pts)
+    vec = normalize(p2-p1)
+    dists = map(v->norm(v-proj_to_line(v,vec)),vecs)
+    k = argmax(dists)
+    polygon, A, L, i, j, k
+
+end
+
+# spread out sub assemblies
