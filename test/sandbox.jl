@@ -36,6 +36,9 @@ hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 # poly = Polyhedra.polyhedron(LazySets.translate(hpoly,[3.0,0.0,0.0]))
 
+# to 2D for    assigning robot carry positions
+polygon = VPolygon(convex_hull(map(v->v[1:2],vertices_list(hpoly))))
+
 setobject!(vis[:ball], GeometryBasics.Sphere(Point(ball.center...),ball.radius))
 setobject!(vis[:ball2], GeometryBasics.Sphere(Point(ball2.center...),ball2.radius))
 setobject!(vis[:polytope], Polyhedra.Mesh(poly), POLYHEDRON_MATERIAL)

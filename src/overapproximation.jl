@@ -179,19 +179,29 @@ end
 
 # select robot carry locations
 """
-    maximally_spaced_neighbors(pts,n::Int)
+    spaced_neighbors(polygon,n::Int,aggregator=sum)
 
-return the indices of the `n` maximally spaced neighbors along the edges of a
-polygon.
+Return the indices of the `n` vertices of `polygon` whose neighbor distances
+maximize the utility metric defined by `aggregator`. Uses local optimization,
+so there is no guarantee of global optimality.
 """
-function maximally_spaced_neighbors(polygon,n::Int,aggregator=sum,ϵ=1e-8)
+function spaced_neighbors(polygon,n::Int,
+        neighbor_aggregator=sum,
+        inner_aggregator=sum,
+        ϵ=1e-8)
     pts = vertices_list(polygon)
     @assert length(pts) >= n
     if length(pts) == n
         return collect(1:n)
     end
     D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
-    d = (D,idxs)->aggregator(map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs)))
+    d_neighbor = (D,idxs)->neighbor_aggregator(
+        map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs))
+        )
+    d_inner = (D,idxs)->inner_aggregator(
+        [wrap_get(D,[i,j]) for (i,j) in Base.Iterators.product(idxs,idxs)]
+        )
+    d = (D,idxs)->d_neighbor(D,idxs)+d_inner(D,idxs)
     best_idxs = SVector{n,Int}(collect(1:n)...)
     d_hi = d(D,best_idxs)
     idx_list = [best_idxs]
@@ -199,8 +209,8 @@ function maximally_spaced_neighbors(polygon,n::Int,aggregator=sum,ϵ=1e-8)
         updated = false
         for deltas in Base.Iterators.product(map(i->(-1,0,1),1:n)...)
             idxs = sort(map(i->wrap_idx(length(pts),i),best_idxs .+ deltas))
+            @show idxs
             if length(unique(idxs)) == n
-                dv = map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs))
                 if d(D,idxs) > d_hi + ϵ
                     best_idxs = map(i->wrap_idx(length(pts),i),idxs)
                     d_hi = d(D,idxs)
@@ -214,7 +224,7 @@ function maximally_spaced_neighbors(polygon,n::Int,aggregator=sum,ϵ=1e-8)
             break
         end
     end
-    return best_idxs, d_hi, idx_list
+    return best_idxs, d_hi
 end
 function extremal_points(pts)
     D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
