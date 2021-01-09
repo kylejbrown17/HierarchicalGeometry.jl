@@ -179,6 +179,32 @@ end
 
 # select robot carry locations
 """
+    construct_support_placement_aggregator
+
+Construct an objective function that scores a selection of indices into `pts`.
+Balances a neighbor-neighbor metric with a all-all metric
+Args
+* pts - a vector of points
+* n - the number of indices to be selected
+* [f_neighbor = v->1.0*minimum(v)] - a function mapping a vector of distances
+    to a scalar value.
+* [f_inner = v->1.0*minimum(v)] - a function mapping a vector of distances
+    to a scalar value.
+"""
+function construct_support_placement_aggregator(pts, n,
+        f_neighbor=v->1.0*minimum(v)+(0.5/n)*sum(v),
+        f_inner=v->(0.1/(n^2))*minimum(v)
+    )
+    D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
+    d_neighbor = (idxs)->f_neighbor(
+        map(i->wrap_get(D,(idxs[i],wrap_get(idxs,i+1))),1:length(idxs))
+        )
+    d_inner = (idxs)->f_inner(
+        [wrap_get(D,(i,j)) for (i,j) in Base.Iterators.product(idxs,idxs)]
+        )
+    d = (idxs)->d_neighbor(idxs)+d_inner(idxs)
+end
+"""
     spaced_neighbors(polygon,n::Int,aggregator=sum)
 
 Return the indices of the `n` vertices of `polygon` whose neighbor distances
@@ -186,24 +212,15 @@ maximize the utility metric defined by `aggregator`. Uses local optimization,
 so there is no guarantee of global optimality.
 """
 function spaced_neighbors(polygon,n::Int,
-        neighbor_aggregator=sum,
-        inner_aggregator=sum,
+        score_function=construct_support_placement_aggregator(vertices_list(polygon), n),
         ϵ=1e-8)
     pts = vertices_list(polygon)
-    @assert length(pts) >= n
+    @assert length(pts) >= n "length(pts) = $(length(pts)), but n = $n"
     if length(pts) == n
         return collect(1:n)
     end
-    D = [norm(v-vp) for (v,vp) in Base.Iterators.product(pts,pts)]
-    d_neighbor = (D,idxs)->neighbor_aggregator(
-        map(i->wrap_get(D,[idxs[i],wrap_get(idxs,i+1)]),1:length(idxs))
-        )
-    d_inner = (D,idxs)->inner_aggregator(
-        [wrap_get(D,[i,j]) for (i,j) in Base.Iterators.product(idxs,idxs)]
-        )
-    d = (D,idxs)->d_neighbor(D,idxs)+d_inner(D,idxs)
     best_idxs = SVector{n,Int}(collect(1:n)...)
-    d_hi = d(D,best_idxs)
+    d_hi = score_function(best_idxs)
     idx_list = [best_idxs]
     while true
         updated = false
@@ -211,9 +228,9 @@ function spaced_neighbors(polygon,n::Int,
             idxs = sort(map(i->wrap_idx(length(pts),i),best_idxs .+ deltas))
             @show idxs
             if length(unique(idxs)) == n
-                if d(D,idxs) > d_hi + ϵ
+                if score_function(idxs) > d_hi + ϵ
                     best_idxs = map(i->wrap_idx(length(pts),i),idxs)
-                    d_hi = d(D,idxs)
+                    d_hi = score_function(idxs)
                     @show best_idxs, d_hi
                     push!(idx_list,best_idxs)
                     updated = true
@@ -237,38 +254,56 @@ function proj_to_line_between_points(p,p1,p2)
     vec = normalize(p2-p1)
     p1 .+ proj_to_line(v,vec)
 end
+perimeter(pts) = sum(map(i->norm(wrap_get(pts,(i,i+1))),1:length(pts)))
+perimeter(p::LazySets.AbstractPolygon) = perimeter(vertices_list(p))
+get_pts(p::LazySets.AbstractPolytope) = vertices_list(p)
+get_pts(v::AbstractVector) = v
 """
     select_support_locations(geom,transport_model)
 
 Given some arbitrary 3D geometry, select a set of locations to support it from
-beneath
+beneath. Requires specification of an aggregator function.
 """
-function select_support_locations(geom,transport_model)
+function select_support_locations(geom,transport_model,
+        score_function_constructor=construct_support_placement_aggregator,
+    )
     r       = transport_model.robot_radius
-    a_r_max = transport_model.max_area_per_robot
-    a_r_min = transport_model.min_area_per_robot
+    a_r_max     = transport_model.max_area_per_robot
     v_r_max = transport_model.max_volume_per_robot
-    v_r_min = transport_model.min_volume_per_robot
 
     zvec = SVector{3,Float64}(0,0,1)
     proj_mat = one(SMatrix{3,3,Float64})[1:2,1:3]
-    polygon = VPolygon(convex_hull(map(v->proj_mat*v,vertices_list(geom))))
-    # height
-    H = maximum(map(v->sum(dot(v,zvec))),vertices_list(geom))
-    # area
-    A = LazySets.area(polygon)
-    pts = vertices_list(polygon)
+    # gpts = get_pts(geom)
+    polygon = VPolygon(convex_hull(map(v->proj_mat*v,geom)))
+    # compute geom height, projection area, and bounding volume
+    H = maximum(map(v->sum(dot(v,zvec)),geom)) # height
+    A = LazySets.area(polygon) # area
+    P = perimeter(polygon)
+    V = H*A # volume
+    # compute rquired number of robots
+    n = Int(ceil(max(A / a_r_max, V / v_r_max)))
+    n = min(n,Int(ceil(P/(2*r))))
+    if n == 1
+        support_pts = [LazySets.center(polygon)]
+    else
+        pts = vertices_list(polygon)
+        score_function=score_function_constructor(pts,n)
+        best_idxs, _ = spaced_neighbors(polygon,n,score_function)
+        @show best_idxs
+        support_pts = pts[best_idxs]
+    end
     # length
-    L, (i,j) = extremal_points(pts)
+    # L, (i,j) = extremal_points(pts)
     # width
-    p1 = pts[i]
-    p2 = pts[j]
-    vecs = map(p->p.-p1,pts)
-    vec = normalize(p2-p1)
-    dists = map(v->norm(v-proj_to_line(v,vec)),vecs)
-    k = argmax(dists)
-    polygon, A, L, i, j, k
+    # p1 = pts[i]
+    # p2 = pts[j]
+    # vecs = map(p->p.-p1,pts)
+    # vec = normalize(p2-p1)
+    # dists = map(v->norm(v-proj_to_line(v,vec)),vecs)
+    # k = argmax(dists)
+    support_pts
 
 end
+select_support_locations(p::AbstractPolytope,args...) = select_support_locations(vertices_list(p),args...)
 
 # spread out sub assemblies

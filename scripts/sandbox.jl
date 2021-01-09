@@ -11,12 +11,8 @@ using LinearAlgebra
 # using Meshing
 using Colors
 using Test
+using Plots
 
-
-POLYHEDRON_MATERIAL = MeshPhongMaterial(color=RGBA{Float32}(1, 0, 0, 0.5))
-
-vis = Visualizer()
-render(vis)
 
 ball = LazySets.Ball2(zeros(3),2.0)
 
@@ -36,11 +32,30 @@ hpoly = overapproximate(lazy_set,model)
 poly = Polyhedra.polyhedron(hpoly)
 # poly = Polyhedra.polyhedron(LazySets.translate(hpoly,[3.0,0.0,0.0]))
 
-# to 2D for    assigning robot carry positions
+# to 2D for assigning robot carry positions
+geom = hpoly
 polygon = VPolygon(convex_hull(map(v->v[1:2],vertices_list(hpoly))))
 
-setobject!(vis[:ball], GeometryBasics.Sphere(Point(ball.center...),ball.radius))
-setobject!(vis[:ball2], GeometryBasics.Sphere(Point(ball2.center...),ball2.radius))
-setobject!(vis[:polytope], Polyhedra.Mesh(poly), POLYHEDRON_MATERIAL)
+transport_model = (
+    robot_radius = 1.0,
+    max_area_per_robot = 10.0,
+    max_volume_per_robot = 30.0,
+)
+support_pts = HierarchicalGeometry.select_support_locations(geom,transport_model)
 
-MeshCat.delete!(vis)
+plt = plot(polygon, 1e-3, aspectratio=1, alpha=0.4)
+for pt in support_pts
+    circ = Ball2(pt,transport_model.robot_radius)
+    plot!(plt, circ)
+end
+display(plt)
+
+# POLYHEDRON_MATERIAL = MeshPhongMaterial(color=RGBA{Float32}(1, 0, 0, 0.5))
+# vis = Visualizer()
+# render(vis)
+# setobject!(vis[:ball], GeometryBasics.Sphere(Point(ball.center...),ball.radius))
+# setobject!(vis[:ball2], GeometryBasics.Sphere(Point(ball2.center...),ball2.radius))
+# setobject!(vis[:polytope], Polyhedra.Mesh(poly), POLYHEDRON_MATERIAL)
+# setobject!(vis[:polytope], Polyhedra.Mesh{3}(poly), POLYHEDRON_MATERIAL)
+#
+# MeshCat.delete!(vis)
