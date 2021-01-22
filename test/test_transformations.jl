@@ -78,7 +78,7 @@ end
 # Test Transform Tree
 let
     for root in [TransformNode(), GeomNode(Ball2(zeros(3),1.0))]
-        tree = GraphUtils.CustomTree{typeof(root),Symbol}()
+        tree = GraphUtils.CustomNTree{typeof(root),Symbol}()
         add_node!(tree,root,:ONE)
         GraphUtils.add_child!(tree,:ONE,deepcopy(root),:TWO)
         GraphUtils.add_child!(tree,:TWO,deepcopy(root),:THREE)
@@ -128,7 +128,7 @@ let
 end
 # Test GeomNode
 let
-    geom = Ball2(ones(3),1.0)
+    geom = Ball2(ones(SVector{3,Float64}),1.0)
     n = GeomNode(geom)
     @test array_isapprox(get_base_geom(n).center,geom.center)
     set_up_to_date!(n,true)
@@ -144,7 +144,7 @@ end
 # Test SceneTree
 let
     tree = SceneTree()
-    geom = GeomNode(Ball2(zeros(3),1.0))
+    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
     add_node!(tree,RobotNode(RobotID(1),deepcopy(geom)))
     add_node!(tree,ObjectNode(ObjectID(1),deepcopy(geom)))
     add_node!(tree,AssemblyNode(AssemblyID(1),deepcopy(geom)))
@@ -201,9 +201,53 @@ let
     end
 
 end
+# Test SceneTree some more
+let 
+    tree = SceneTree()
+    # Goal:
+    # Assembly 1
+    #  -- Assembly 2
+    #      -- Object 1
+    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
+    a1 = add_node!(tree,AssemblyNode(AssemblyID(1),deepcopy(geom)))
+    a2 = add_node!(tree,AssemblyNode(AssemblyID(2),deepcopy(geom)))
+    o1 = add_node!(tree,ObjectNode(ObjectID(1),deepcopy(geom)))
+    add_component!(a1, node_id(a2)=>identity_linear_map())
+    add_component!(a2, node_id(o1)=>identity_linear_map())
+
+    r1 = add_node!(tree,RobotNode(RobotID(1),deepcopy(geom)))
+    t1 = add_node!(tree,TransportUnitNode(TransportUnitID(1),deepcopy(geom),
+        node_id(a2)=>identity_linear_map()))
+    add_robot!(t1,node_id(r1)=>identity_linear_map())
+
+    @test isa(make_edge(tree,t1,r1), HierarchicalGeometry.TemporaryEdge)
+    @test isa(make_edge(tree,t1,a2), HierarchicalGeometry.TemporaryEdge)
+    @test isa(make_edge(tree,a1,a2), HierarchicalGeometry.PermanentEdge)
+    @test isa(make_edge(tree,a2,o1), HierarchicalGeometry.PermanentEdge)
+
+    HierarchicalGeometry.relative_transform(tree,a1,a2)
+    Rotations.rotation_error(tree,a1,a2)
+
+    # set_child!(tree,a2,o1) # lock o1 into a2
+    capture_child!(tree,a2,o1) # lock o1 into a2
+    @test has_edge(tree,a2,o1)
+    set_child!(tree,t1,a2) # make a2 a temporary child of t1
+    set_child!(tree,t1,r1) # make r1 a temporary child of t1
+
+    rem_edge!(tree,t1,a2) # once a2 is in place w.r.t a1, remove edge from t1
+    set_child!(tree,a1,a2) # lock a2 into a1. a1 is complete
+
+    @test_throws AssertionError rem_edge!(tree,a1,a2) # a1 → a2 should be locked
+    @test_throws AssertionError rem_edge!(tree,a2,o1) # a2 → o1 should be locked
+    
+    @test_throws AssertionError set_child!(tree,o1,r1)
+    @test_throws AssertionError set_child!(tree,RobotID(1),ObjectID(1))
+    @test_throws AssertionError set_child!(tree,TransportUnitID(1),ObjectID(1))
+    @test_throws AssertionError set_child!(tree,AssemblyID(1),RobotID(1))
+end
 # test copy(::SceneNode)
 let
-    geom = GeomNode(Ball2(zeros(3),1.0))
+    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
     t = CoordinateTransformations.Translation(1.0,0.0,0.0)
 
     n = AssemblyNode(AssemblyID(1),deepcopy(geom))

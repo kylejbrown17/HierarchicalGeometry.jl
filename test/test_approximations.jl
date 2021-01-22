@@ -52,6 +52,10 @@ let
     @test is_intersection_empty(occupancy,occupancy+8)
 end
 let
+    # a = GeomNode(Hyperrectangle(MArray{Tuple{3}}(0.0,0.0,0.0),MArray{Tuple{3}}(1.0,1.0,1.0)))
+    # b = GeomNode(Hyperrectangle(MArray{Tuple{3}}(3.0,0.0,0.0),MArray{Tuple{3}}(1.0,1.0,1.0)))
+    # NOTE Hyperrectangle{Float64,MArray{...},MArray{...}} comes out of the 
+    # transform. May want to bear that in mind when constructing
     a = GeomNode(Hyperrectangle([0.0,0.0,0.0],[1.0,1.0,1.0]))
     b = GeomNode(Hyperrectangle([3.0,0.0,0.0],[1.0,1.0,1.0]))
     @test isapprox(HierarchicalGeometry.distance_lower_bound(a,b), 1.0)

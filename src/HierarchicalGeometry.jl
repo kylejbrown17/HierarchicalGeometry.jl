@@ -42,42 +42,40 @@ Transform geometry `geom` according to the transformation `t`.
 TODO: It is important for all base geometries to be defined with respect to
 their own origin.
 """
-transform(v::V,t) where {V<:AbstractVector} = V(t(v))
-function transform!(v::V,t) where {V<:AbstractVector}
-    v .= transform(v,t)
-end
-transform(h::LazySets.HalfSpace,t::CoordinateTransformations.LinearMap{R}) where {R<:Rotation} = LazySets.HalfSpace(transform(Vector(h.a),t),h.b)
-function transform!(h::LazySets.HalfSpace,t)
-    h.a .= transform!(h).a
-    return h
-end
-transform(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate(g,Vector(t.translation))
-transform!(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
-transform(g::Ball2,t::CoordinateTransformations.LinearMap) = Ball2(transform(g.center,t),g.radius)
-function transform!(g::Ball2,t::CoordinateTransformations.LinearMap)
-    transform!(g.center,t)
-    return g
-end
+transform(v,t) = t(v)
+# transform(v::V,t) where {V<:AbstractVector} = V(t(v))
+
+(t::CoordinateTransformations.LinearMap)(::Nothing) = nothing
+(t::CoordinateTransformations.Translation)(::Nothing) = nothing
+(t::CoordinateTransformations.LinearMap)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
+(t::CoordinateTransformations.Translation)(g::BaseGeometry) = LazySets.translate(g,Vector(t.translation))
+(t::CoordinateTransformations.LinearMap)(g::Ball2) = Ball2(t(g.center),g.radius)
 """
-    "rotating" a Hyperrectangle `g` results in a new Hyperrectangle that bounds the
-    transformed version `g`.
+    (t::CoordinateTransformations.LinearMap)(g::Hyperrectangle)
+
+"rotating" a Hyperrectangle `g` results in a new Hyperrectangle that bounds the
+transformed version `g`.
 """
-transform(g::Hyperrectangle,t::CoordinateTransformations.LinearMap) = overapproximate(transform(convert(LazySets.VPolytope,g),t),Hyperrectangle)
-function transform(g::VPolytope,t::CoordinateTransformations.LinearMap{R}) where {R}#{R<:Rotation}
-    VPolytope(map(v->transform(v,t), vertices_list(g)))
-end
-function transform(g::HPolytope,t::CoordinateTransformations.LinearMap{R}) where {R}#{R<:Rotation}
-    HPolytope(map(h->transform(h,t), constraints_list(g)))
-end
-function transform(g::BaseGeometry,t::CoordinateTransformations.AffineMap{R,T}) where {R,T}#{R<:Rotation,T}
-    transform(
-        transform(g,CoordinateTransformations.LinearMap(t.linear)),
-        CoordinateTransformations.Translation(t.translation)
-        )
-end
+(t::CoordinateTransformations.LinearMap)(g::Hyperrectangle) = overapproximate(t(convert(LazySets.VPolytope,g)),Hyperrectangle)
+(t::CoordinateTransformations.LinearMap)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
+(t::CoordinateTransformations.LinearMap)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
+
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map() = identity_linear_map3()
+Base.convert(::Type{Hyperrectangle{Float64,T,T}},rect::Hyperrectangle) where {T} = Hyperrectangle(T(rect.center),T(rect.radius))
+# function transform!(v::V,t) where {V<:AbstractVector}
+#     v .= transform(v,t)
+# end
+# function transform!(h::LazySets.HalfSpace,t)
+#     h.a .= transform(h,t).a
+#     return h
+# end
+# transform!(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
+# function transform!(g::Ball2,t::CoordinateTransformations.LinearMap)
+#     transform!(g.center,t)
+#     return g
+# end
 
 """
     relative_transform(a::AffineMap,b::AffineMap)
@@ -97,6 +95,13 @@ function Rotations.rotation_error(
     rot_err = Rotations.rotation_error(
         UnitQuaternion(a.linear),
         UnitQuaternion(b.linear),error_map)
+end
+for op in (:relative_transform,:(Rotations.rotation_error))
+    @eval $op(tree::AbstractCustomTree,parent,child,args...) = $op(
+        global_transform(tree,parent),
+        global_transform(tree,child),
+        args...
+    )
 end
 
 export
@@ -246,7 +251,7 @@ export
 # end
 tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,n))
 local_transform(tree,v) = local_transform(get_node(tree,n))
-function get_parent_transform(g::AbstractCustomNTree,v)
+function get_parent_transform(g::AbstractCustomTree,v)
     vp = get_parent(g,v)
     if has_vertex(g,vp)
         return global_transform(g,vp)
@@ -274,7 +279,7 @@ end
 Updates the global transforms of `v` and its successors based on their local
 transforms.
 """
-function update_transform_tree!(g::AbstractCustomNTree,v)
+function update_transform_tree!(g::AbstractCustomTree,v)
     n = get_node(g,v)
     set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
     for vp in outneighbors(g,v)
@@ -283,13 +288,13 @@ function update_transform_tree!(g::AbstractCustomNTree,v)
     return g
 end
 """
-    propagate_tf_flag!(g::AbstractCustomNTree,v,val=false)
+    propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
 
 Calls `set_tf_up_to_date!(get_node(g,vp),val)` on v and all outneighbors thereof.
 Needs to be called by `set_local_transform!(g, ...)` unless
 `update_transform_tree!(g, ...)` is called instead.
 """
-function propagate_tf_flag!(g::AbstractCustomNTree,v,val=false)
+function propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
     n = get_node(g,v)
     if tf_up_to_date(n)
         return g
@@ -300,7 +305,7 @@ function propagate_tf_flag!(g::AbstractCustomNTree,v,val=false)
     end
     return g
 end
-function set_local_transform!(g::AbstractCustomNTree,v,t,update=true)
+function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
     set_local_transform!(get_node(g,v),t)
     if update
         update_transform_tree!(g,v)
@@ -315,12 +320,12 @@ end
 Replace existing edge `old_parent` → `child` with new edge `parent` → `child`.
 Set the `child.local_transform` to `new_local_transform`.
 """
-function set_child!(tree::AbstractCustomNTree,parent,child,
-        t=relative_transform(global_transform(tree,parent),
-            global_transform(tree,child))
+function set_child!(tree::AbstractCustomTree,parent,child,
+        t=relative_transform(tree,parent,child),
+        edge=nothing
     )
     rem_edge!(tree,get_parent(tree,child),child)
-    add_edge!(tree,parent,child)
+    add_edge!(tree,parent,child,edge)
     @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
     set_local_transform!(tree,child,t)
 end
@@ -473,7 +478,8 @@ export
     TransportUnitNode,
         robot_team,
         add_robot!,
-    SceneTree
+    SceneTree,
+    capture_child!
 
 const TransformDict{T} = Dict{T,CoordinateTransformations.Transformation}
 """
@@ -490,12 +496,56 @@ end
 # struct BaseNode <: SceneNode
 #     id::VtxID
 # end
+"""
+    abstract type SceneNode
+
+A node of the `SceneTree`. Each concrete subtype of `SceneNode` 
+contains all of the following information:
+- All required children (whether for a temporary or permanent edge)
+- Required Parent (For a permanent edge only)
+- Geometry of the entity represented by the node
+- Unique ID accessible via `GraphUtils.node_id(node)`
+- Current transform--both global (relative to base frame) and local (relative to 
+current parent)
+- Required transform relative to parent (if applicable)
+
+"""
 abstract type SceneNode end
+abstract type SceneAssemblyNode <: SceneNode end
+# SceneNode interface
+GraphUtils.node_id(n::SceneNode) = n.id
+
+"""
+    required_transforms_to_children(n::SceneNode)
+
+Returns a dictionary mapping child id to required relative transform.
+"""
+function required_transforms_to_children(n::SceneNode)
+    return TransformDict{AbstractID}()
+end
+
+"""
+    required_parent(n::SceneNode)
+
+Returns the id of the required parent node. This is only applicable to 
+`ObjectNode` and `AssemblyNode`.
+"""
+function required_parent end
+
+"""
+    required_transform_to_parent(n::SceneNode,parent_id)
+
+Returns the required transform relative to the parent.
+"""
+function required_transform_to_parent end
+
 for op in geom_node_accessor_interface
     @eval $op(n::SceneNode) = $op(n.geom)
+    @eval $op(n::CustomNode) = $op(node_val(n))
 end
 for op in geom_node_mutator_interface
     @eval $op(n::SceneNode,val) = $op(n.geom,val)
+    @eval $op(n::CustomNode,val) = $op(node_val(n),val)
 end
 """
     Base.copy(n::N) where {N<:SceneNode}
@@ -524,39 +574,81 @@ struct AssemblyNode <: SceneNode
 end
 AssemblyNode(n::AssemblyNode,geom::GeomNode) = AssemblyNode(n.id,geom,n.components)
 AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}())
-components(n::AssemblyNode) = n.components
-add_component!(n::AssemblyNode,p) = push!(n.components,p)
-has_component(n::AssemblyNode,id) = haskey(components(n),id)
+components(n::AssemblyNode)         = n.components
+add_component!(n::AssemblyNode,p)   = push!(n.components,p)
+has_component(n::AssemblyNode,id)   = haskey(components(n),id)
 child_transform(n::AssemblyNode,id) = components(n)[id]
+
 struct TransportUnitNode <: SceneNode
     id::TransportUnitID
     geom::GeomNode
     assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
-    robots::TransformDict{BotID}
+    robots::TransformDict{BotID} # must be filled with unique invalid ids
 end
 TransportUnitNode(n::TransportUnitNode,geom::GeomNode) = TransportUnitNode(n.id,geom,n.assembly,n.robots)
 TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}())
 TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
 robot_team(n::TransportUnitNode) = n.robots
 assembly_id(n::TransportUnitNode) = n.assembly.first
-has_component(n::TransportUnitNode,id::AssemblyID) = id == assembly_id(n)
-has_component(n::TransportUnitNode,id::BotID) = haskey(robot_team(n),id)
-child_transform(n::TransportUnitNode,id::AssemblyID) = n.assembly.second
-child_transform(n::TransportUnitNode,id::BotID) = robot_team(n)[id]
-add_robot!(n::TransportUnitNode,p) = push!(robot_team(n),p)
-add_robot!(n::TransportUnitNode,r,t) = add_robot!(n,r=>t)
-"""
-    SceneTree
 
-A tree data structure for describing the state of a manufacturing project.
-`AssemblyNode`s define how objects/subassemblies fit together, and
-`TransportUnitNode` define how robots fit together to form a transport team.
+has_component(n::TransportUnitNode,id::AssemblyID)  = id == assembly_id(n)
+has_component(n::TransportUnitNode,id::BotID)       = haskey(robot_team(n),id)
+child_transform(n::TransportUnitNode,id::AssemblyID) = n.assembly.second
+child_transform(n::TransportUnitNode,id::BotID)     = robot_team(n)[id]
+add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
+add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
+
 """
-@with_kw struct SceneTree <: AbstractCustomNTree{SceneNode,AbstractID}
+    abstract type SceneTreeEdge
+
+Concrete subtypes are `PermanentEdge` or `TemporaryEdge`. The idea is that 
+the former is not allowed to be removed, whereas the latter stays in place.
+"""
+abstract type SceneTreeEdge end
+struct PermanentEdge <: SceneTreeEdge end
+struct TemporaryEdge <: SceneTreeEdge end
+for U in (:TransportUnitID,:TransportUnitNode)
+    for V in (:RobotID,:RobotNode,:AssemblyID,:AssemblyNode)
+        @eval GraphUtils.make_edge(g,u::$U,v::$V) = TemporaryEdge()
+    end
+end
+for U in (:AssemblyID,:AssemblyNode)
+    for V in (:ObjectID,:ObjectNode,:AssemblyID,:AssemblyNode)
+        @eval GraphUtils.make_edge(g,u::$U,v::$V) = PermanentEdge()
+    end
+end
+
+"""
+    SceneTree <: AbstractCustomNETree{SceneNode,SceneTreeEdge,AbstractID}
+
+A tree data structure for describing the current configuration of a multi-entity 
+system, as well as the desired final configuration. The configuration of the 
+system is defined by the topology of the tree (i.e., which nodes are connected
+by edges) and the configuration of each node (its transform relative to its 
+parent node).
+There are four different concrete subtypes of `SceneNode`
+- `ObjectNode` refers to a single inanimate rigid body
+- `RobotNode` refers to a single rigid body robot
+- `AssemblyNode` refers to a rigid collection of multiple objects and/or 
+subassemblies
+- `TransportUnitNode` refers to a team of one or more robot that fit together as 
+a transport team to move an assembly or object.
+The edges of the SceneTree are either `PermanentEdge` or `TemporaryEdge`.
+Temporary edges (removed after transport is complete)
+- TransportUnitNode → RobotNode
+- TransportUnitNode → ObjectNode
+- TransportUnitNode → AssemblyNode
+Permanent edges (cannot be broken after placement)
+- AssemblyNode → AssemblyNode
+- AssemblyNode → ObjectNode
+"""
+@with_kw struct SceneTree <: AbstractCustomNETree{SceneNode,SceneTreeEdge,AbstractID}
     graph               ::DiGraph               = DiGraph()
     nodes               ::Vector{SceneNode}     = Vector{SceneNode}()
     vtx_map             ::Dict{AbstractID,Int}  = Dict{AbstractID,Int}()
     vtx_ids             ::Vector{AbstractID}    = Vector{AbstractID}()
+    inedges             ::Vector{Dict{Int,SceneTreeEdge}}   = Vector{Dict{Int,SceneTreeEdge}}()
+    outedges            ::Vector{Dict{Int,SceneTreeEdge}}   = Vector{Dict{Int,SceneTreeEdge}}()
 end
 GraphUtils.add_node!(tree::SceneTree,node::SceneNode) = add_node!(tree,node,node.id)
 GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,n.id)
@@ -569,8 +661,6 @@ function Base.copy(tree::SceneTree)
     )
 end
 
-set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,parent.id,args...)
-set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,child.id,args...)
 """
     set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
 
@@ -582,8 +672,43 @@ function set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
     node = get_node(tree,parent)
     @assert has_component(node,child) "$(get_node(tree,child)) cannot be a child of $(node)"
     t = child_transform(node,child)
-    set_child!(tree,parent,get_vtx(tree,child),t)
+    set_child!(tree,parent,get_vtx(tree,child),t,make_edge(tree,parent,child))
 end
+set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,node_id(parent),args...)
+set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,node_id(child),args...)
+
+"""
+    LightGraphs.rem_edge!(tree::SceneTree,u,v)
+
+Edge may only be removed if it is not permanent.
+"""
+function LightGraphs.rem_edge!(tree::SceneTree,u,v)
+    if !has_edge(tree,u,v)
+        return true
+    end
+    @assert !isa(get_edge(tree,u,v),PermanentEdge) "Edge $u → $v is permanent!"
+    GraphUtils.delete_edge!(tree,u,v)
+end
+
+"""
+    capture_child!(tree::SceneTree,u,v,ttol,rtol)
+
+If the transform error of `v` relative to the transform prescribed for it by `u`
+is small, allow `u` to capture `v` (`v` becomes a child of `u`).
+"""
+function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
+    nu = get_node(tree,u)
+    nv = get_node(tree,v)
+    @assert has_component(nu,node_id(nv)) "$nu cannot capture $nv"
+    t = relative_transform(tree,u,v)
+    t_des = child_transform(nu,node_id(nv))
+    et = norm(t.translation - t_des.translation) # translation error
+    er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
+    if et < ttol && er < rtol
+        set_child!(tree,u,v)
+    end
+end
+
 
 ### Collision Table
 const CollisionStack = Dict{Int,Set{ID}} where {ID}
