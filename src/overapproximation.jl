@@ -86,6 +86,10 @@ end
 
 LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 
+# LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = mapfoldl(v->ρ(d,v),max,geom)
+LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = maximum(map(v->ρ(d,v),geom))
+
+
 function LazySets.overapproximate(lazy_set,model::HPolytope,epsilon::Float64=0.1)
     halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)), constraints_list(model))
     sort!(halfspaces; by = h->h.b)

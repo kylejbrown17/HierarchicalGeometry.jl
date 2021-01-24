@@ -249,8 +249,8 @@ export
 #     vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
 #     vtx_ids             ::Vector{ID}            = Vector{ID}()
 # end
-tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,n))
-local_transform(tree,v) = local_transform(get_node(tree,n))
+tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,v))
+local_transform(tree,v) = local_transform(get_node(tree,v))
 function get_parent_transform(g::AbstractCustomTree,v)
     vp = get_parent(g,v)
     if has_vertex(g,vp)
@@ -312,7 +312,8 @@ function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
     else
         propagate_tf_flag!(g,v,false)
     end
-    return g
+    # return g
+    return t
 end
 """
     set_child!(tree,parent,child,new_local_transform)
@@ -325,9 +326,12 @@ function set_child!(tree::AbstractCustomTree,parent,child,
         edge=nothing
     )
     rem_edge!(tree,get_parent(tree,child),child)
-    add_edge!(tree,parent,child,edge)
-    @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
-    set_local_transform!(tree,child,t)
+    if add_edge!(tree,parent,child,edge)
+        @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
+        set_local_transform!(tree,child,t)
+        return true
+    end
+    return false
 end
 const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!]
 
@@ -475,11 +479,13 @@ export
     AssemblyNode,
         components,
         add_component!,
+        child_transform,
     TransportUnitNode,
         robot_team,
         add_robot!,
     SceneTree,
-    capture_child!
+        capture_child!,
+        disband!
 
 const TransformDict{T} = Dict{T,CoordinateTransformations.Transformation}
 """
@@ -691,6 +697,22 @@ function LightGraphs.rem_edge!(tree::SceneTree,u,v)
 end
 
 """
+    disband!(tree::SceneTree,n::TransportUnitNode)
+
+Disband a transport unit by removing the edge to its children.
+"""
+function disband!(tree::SceneTree,n::TransportUnitNode)
+    for (r,tform) in robot_team(n)
+        if !has_edge(tree,n,r)
+            @warn "Disbanding $n -- $r should be attached, but is not"
+        end
+        rem_edge!(tree,n,r)
+    end
+    rem_edge!(tree,n,assembly_id(n))
+    return true
+end
+
+"""
     capture_child!(tree::SceneTree,u,v,ttol,rtol)
 
 If the transform error of `v` relative to the transform prescribed for it by `u`
@@ -705,8 +727,17 @@ function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
     et = norm(t.translation - t_des.translation) # translation error
     er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
     if et < ttol && er < rtol
-        set_child!(tree,u,v)
+        if !is_root_node(tree,v)
+            p = get_node(tree,get_parent(tree,v)) # current parent
+            @assert(isa(p, TransportUnitNode),
+                "Trying to capture child $v from non-TransportUnit parent $p")
+            # NOTE that there may be a time gap if the assembly has to be lifted
+            # into place by a separate "robot"
+            disband!(tree,p)
+        end
+        return set_child!(tree,u,v)
     end
+    return false
 end
 
 

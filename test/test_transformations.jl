@@ -225,17 +225,19 @@ let
     @test isa(make_edge(tree,a1,a2), HierarchicalGeometry.PermanentEdge)
     @test isa(make_edge(tree,a2,o1), HierarchicalGeometry.PermanentEdge)
 
-    HierarchicalGeometry.relative_transform(tree,a1,a2)
-    Rotations.rotation_error(tree,a1,a2)
-
-    # set_child!(tree,a2,o1) # lock o1 into a2
-    capture_child!(tree,a2,o1) # lock o1 into a2
+    @test capture_child!(tree,a2,o1) # lock o1 into a2
     @test has_edge(tree,a2,o1)
-    set_child!(tree,t1,a2) # make a2 a temporary child of t1
-    set_child!(tree,t1,r1) # make r1 a temporary child of t1
+    @test set_child!(tree,t1,a2) # make a2 a temporary child of t1
 
-    rem_edge!(tree,t1,a2) # once a2 is in place w.r.t a1, remove edge from t1
-    set_child!(tree,a1,a2) # lock a2 into a1. a1 is complete
+    set_local_transform!(tree,r1,local_transform(r1) ∘ CoordinateTransformations.Translation(1.0,0.0,0.0))
+    @test !capture_child!(tree,t1,r1) # not close enough to be captured
+    set_local_transform!(tree,r1,child_transform(t1,node_id(r1)))
+    @test capture_child!(tree,t1,r1) # close enough to be captured now
+
+    # rem_edge!(tree,t1,a2) # once a2 is in place w.r.t a1, remove edge from t1
+    @test capture_child!(tree,a1,a2) # lock a2 into a1. a1 is complete
+    @test has_edge(tree,a1,a2)
+    @test !has_edge(tree,t1,r1) # verify that t1 has been disbanded
 
     @test_throws AssertionError rem_edge!(tree,a1,a2) # a1 → a2 should be locked
     @test_throws AssertionError rem_edge!(tree,a2,o1) # a2 → o1 should be locked
