@@ -153,48 +153,16 @@ function check_collision(a,b)
     return false
 end
 
-export
-    CachedElement,
-    get_element,
-    is_up_to_date,
-    set_up_to_date!,
-    set_element!,
-    update_element!
-
-"""
-    CachedElement{G}
-
-A mutable container for geometries
-"""
-mutable struct CachedElement{G}
-    element::G
-    is_up_to_date::Bool
-end
-CachedElement(element) = CachedElement(element,false)
-get_element(n::CachedElement) = n.element
-is_up_to_date(n::CachedElement) = n.is_up_to_date
-function set_up_to_date!(n::CachedElement,val::Bool=true)
-    n.is_up_to_date = val
-end
-function set_element!(n::CachedElement,g)
-    n.element = g
-    return g
-end
-function update_element!(n::CachedElement,g)
-    set_element!(n,g)
-    set_up_to_date!(n,true)
-    return g
-end
-const cached_element_accessor_interface = [:is_up_to_date]
-const cached_element_mutator_interface = [:update_element!,:set_element!,:set_up_to_date!]
-"""
-    Base.copy(e::CachedElement)
-
-Shares the e.element, since it doesn't need to be replaced until `set_element!`
-is called. Copies `e.is_up_to_date` to preserve the cache state.
-"""
-Base.copy(e::CachedElement) = CachedElement(e.element,copy(is_up_to_date(e)))
-Base.convert(::Type{CachedElement{T}},e::CachedElement) where {T} = CachedElement{T}(get_element(e),is_up_to_date(e))
+const cached_element_accessor_interface = [
+    :(GraphUtils.is_up_to_date),
+    :(GraphUtils.time_stamp)
+    ]
+const cached_element_mutator_interface = [
+    :(GraphUtils.update_element!),
+    :(GraphUtils.set_time_stamp!),
+    :(GraphUtils.set_element!),
+    :(GraphUtils.set_up_to_date!)
+    ]
 
 
 export
@@ -204,12 +172,53 @@ export
     set_local_transform!,
     set_global_transform!
 
-mutable struct TransformNode
+@with_kw struct TransformNodeID <: AbstractID
+    id::Int = -1
+end
+
+"""
+    TransformNode
+
+Has a parent field that points to another TransformNode.
+"""
+mutable struct TransformNode <: AbstractTreeNode{TransformNodeID}
+    id::TransformNodeID
     local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
     global_transform::CachedElement{CoordinateTransformations.Transformation}
+    parent::TransformNode # parent node
+    children::Dict{TransformNodeID,TransformNode}
+    function TransformNode(
+            a::CoordinateTransformations.Transformation,
+            b::CachedElement)
+        t = new()
+        t.id = get_unique_id(TransformNodeID)
+        t.local_transform = a
+        t.global_transform = b
+        t.parent = t
+        t.children = Dict{TransformNodeID,TransformNodeID}()
+        return t
+    end
 end
-tf_up_to_date(n::TransformNode) = is_up_to_date(n.global_transform)
-set_tf_up_to_date!(n::TransformNode,val) = set_up_to_date!(n.global_transform,val)
+GraphUtils.time_stamp(n::TransformNode) = time_stamp(n.global_transform)
+function tf_up_to_date(n::TransformNode)
+    if is_up_to_date(n.global_transform)
+        if !(n === get_parent(n))
+            return time_stamp(n) > time_stamp(get_parent(n))
+        else
+            return true
+        end
+    end
+    return false
+end
+function set_tf_up_to_date!(n::TransformNode,val=true) 
+    set_up_to_date!(n.global_transform,val)
+    if val == false
+        for (id,child) in get_children(n)
+            set_tf_up_to_date!(child,val)
+        end
+    end
+    return n
+end
 function TransformNode()
     TransformNode(identity_linear_map(),CachedElement(identity_linear_map()))
 end
@@ -220,25 +229,37 @@ function TransformNode(
     TransformNode(a,CachedElement(b))
 end
 local_transform(n::TransformNode) = n.local_transform
+function set_global_transform!(n::TransformNode,t)
+    update_element!(n.global_transform,t)
+    for (id,child) in get_children(n)
+        set_tf_up_to_date!(child,false)
+    end
+    return t
+end
 function global_transform(n::TransformNode)
-    if !is_up_to_date(n.global_transform)
-        @warn string("global_transform out of date!",
-        " Update with set_global_transform!(n,tf)")
+    if !tf_up_to_date(n)
+        if !(n === n.parent)
+            set_global_transform!(n,global_transform(n.parent) ∘ local_transform(n))
+        else
+            # If n has no parent, just return its local transform
+            set_global_transform!(n,local_transform(n))
+            @warn "$n is a root transform node."
+        end
     end
     return get_element(n.global_transform)
 end
-function set_local_transform!(n::TransformNode,t)
+function set_local_transform!(n::TransformNode,t,update=false)
     n.local_transform = t
-end
-function set_global_transform!(n::TransformNode,t)
-    update_element!(n.global_transform,t)
-    return t
+    set_tf_up_to_date!(n,false)
+    if update
+        global_transform(n) # just get the global transform
+    end
+    return n.local_transform
 end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
 const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!]
 
 export
-    # TransformTree,
     set_child!,
     get_parent_transform,
     update_transform_tree!
@@ -327,6 +348,7 @@ function set_child!(tree::AbstractCustomTree,parent,child,
     )
     rem_edge!(tree,get_parent(tree,child),child)
     if add_edge!(tree,parent,child,edge)
+        set_parent!(get_node(tree,child),get_node(tree,parent)) # for TransformNode
         @assert !is_cyclic(tree) "adding edge $(parent) → $(child) made tree cyclic"
         set_local_transform!(tree,child,t)
         return true
@@ -367,6 +389,10 @@ function set_global_transform!(n::GeomNode,t)
     set_up_to_date!(n,false)
     set_global_transform!(n.transform_node,t)
 end
+function GraphUtils.set_parent!(a::GeomNode,b::GeomNode)
+    set_parent!(a.transform_node,b.transform_node)
+end
+
 """
     get_cached_geom(n::GeomNode)
 
@@ -452,11 +478,35 @@ export add_child_approximation!
 function add_child_approximation!(g,model,parent_id,child_id)
     @assert has_vertex(g,parent_id)
     @assert !has_vertex(g,child_id)
-    geom = overapproximate(get_node(g,parent_id).geom,model)
+    geom = overapproximate(get_base_geom(get_node(g,parent_id)),model)
     add_node!(g,GeomNode(geom),child_id)
     add_edge!(g,parent_id,child_id)
     return g
 end
+
+abstract type GeometryKey end
+""" 
+    BaseGeomKey <: GeometryKey
+
+Points to any kind of geometry.
+"""
+struct BaseGeomKey <: GeometryKey end
+"""
+    PolyhedronKey <: GeometryKey
+
+Points to a polyhedron.
+"""
+struct PolyhedronKey <: GeometryKey end
+"""
+    ZonotopeKey<: GeometryKey
+
+Points to a zonotope. Might not be useful for approximating shapes that are very
+asymmetrical.
+"""
+struct ZonotopeKey <: GeometryKey end
+struct HyperrectangleKey <: GeometryKey end
+struct HypersphereKey <: GeometryKey end
+struct CylinderKey <: GeometryKey end
 
 export construct_geometry_tree!
 """
@@ -553,6 +603,9 @@ for op in geom_node_mutator_interface
     @eval $op(n::SceneNode,val) = $op(n.geom,val)
     @eval $op(n::CustomNode,val) = $op(node_val(n),val)
 end
+GraphUtils.set_parent!(a::SceneNode,b::SceneNode) = set_parent!(a.geom,b.geom)
+GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),node_val(b))
+
 """
     Base.copy(n::N) where {N<:SceneNode}
 

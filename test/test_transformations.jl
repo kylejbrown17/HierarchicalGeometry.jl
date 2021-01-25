@@ -75,6 +75,37 @@ let
     b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotXYZ(0.1,0.0,1.0*π)))
     t = HierarchicalGeometry.relative_transform(a,b)
 end
+# Test TransformNode
+let
+    a = TransformNode()
+    b = TransformNode()
+    c = TransformNode()
+    HierarchicalGeometry.set_parent!(b,a)
+    HierarchicalGeometry.set_parent!(c,b)
+
+    @test get_parent(a) === a
+    @test get_parent(b) === a
+    @test get_parent(c) === b
+
+    t = identity_linear_map() ∘ CoordinateTransformations.Translation(1,0,0)
+
+    set_local_transform!(a,t) # Not connected to tree, so can't globally update
+    @test array_isapprox(global_transform(a).translation,t.translation)
+    @test array_isapprox(global_transform(b).translation,t.translation)
+    @test array_isapprox(global_transform(c).translation,t.translation)
+    
+    set_local_transform!(b,t)
+    @test array_isapprox(global_transform(a).translation,t.translation)
+    @test array_isapprox(global_transform(b).translation,2*t.translation)
+    @test array_isapprox(global_transform(c).translation,2*t.translation)
+
+    set_local_transform!(c,t)
+    @test array_isapprox(global_transform(a).translation,t.translation)
+    @test array_isapprox(global_transform(b).translation,2*t.translation)
+    @test array_isapprox(global_transform(c).translation,3*t.translation)
+
+    @test validate_tree(c)
+end
 # Test Transform Tree
 let
     for root in [TransformNode(), GeomNode(Ball2(zeros(3),1.0))]
@@ -82,7 +113,7 @@ let
         add_node!(tree,root,:ONE)
         GraphUtils.add_child!(tree,:ONE,deepcopy(root),:TWO)
         GraphUtils.add_child!(tree,:TWO,deepcopy(root),:THREE)
-        t = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+        t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
         tree2 = deepcopy(tree) # Test deferred computation of transformations
         tree3 = deepcopy(tree) # Test deferred computation of transformations
         for v in LightGraphs.vertices(tree)
@@ -90,10 +121,10 @@ let
             set_local_transform!(tree2,v,t,true) # update successors immediately
             set_local_transform!(tree3,v,t,false) # defer update of predecessors
         end
-        for v in LightGraphs.vertices(tree)
-            # Global transform not updated because query does not include tree. Should throw warning
-            @test array_isapprox(global_transform(get_node(tree,v)).translation,[0.0, 0.0, 0.0])
-        end
+        # for v in LightGraphs.vertices(tree)
+        #     # Global transform not updated because query does not include tree. Should throw warning
+        #     @test array_isapprox(global_transform(get_node(tree,v)).translation,[0.0, 0.0, 0.0])
+        # end
         for v in LightGraphs.vertices(tree)
             # Now transforms will be updated because query is made with tree
             @test array_isapprox(global_transform(tree,v).translation,[v, 0.0, 0.0])
@@ -115,16 +146,6 @@ let
         set_local_transform!(tree,:FOUR,t)
         @test array_isapprox(global_transform(tree,:FOUR).translation,[3.0,0,0])
     end
-end
-# Test CachedElement
-let
-    c = HierarchicalGeometry.CachedElement(1)
-    @test get_element(c) == 1
-    set_up_to_date!(c,false)
-    @test !is_up_to_date(c)
-    update_element!(c,2)
-    @test is_up_to_date(c)
-    @test get_element(c) == 2
 end
 # Test GeomNode
 let
