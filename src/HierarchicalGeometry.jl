@@ -217,6 +217,16 @@ function Base.copy(n::TransformNode)
     # Don't want to copy parent or children. Just need to reconnect later.
     return node
 end
+
+Base.show(io::IO, ::MIME"text/plain", m::TransformNode) = print(
+    io, "TransformNode(",get_id(node_id(m)),")\n", 
+        "  local:  ",local_transform(m), "\n", 
+        "  global: ",global_transform(m), "\n", 
+        "  parent: ",string(node_id(m.parent)),"\n",
+        "  children: ",map(k->string("\n    ",string(k)),collect(keys(get_children(m))))...,"\n",
+        )
+Base.show(io::IO, m::TransformNode) = print(io, "TransformNode(",get_id(node_id(m)),") - ",m.global_transform)
+
 # Cached Tree interface
 GraphUtils.cached_element(n::TransformNode) = n.global_transform
 tf_up_to_date(n::TransformNode) = GraphUtils.cached_node_up_to_date(n)
@@ -340,7 +350,7 @@ get_cached_geom(tree::AbstractCustomTree,v) = get_cached_geom(get_node(tree,v))
 distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(get_cached_geom(a),get_cached_geom(b))
 const geom_node_accessor_interface = [
     transform_node_accessor_interface...,
-    :get_base_geom, :get_cached_geom,
+    :get_base_geom, :get_cached_geom, :get_transform_node
     ]
 const geom_node_mutator_interface = [
     transform_node_mutator_interface...
@@ -564,6 +574,7 @@ struct RobotNode{R} <: SceneNode
 end
 RobotNode(id::BotID,geom) = RobotNode(id,geom,geom_hierarchy(geom))
 RobotNode(n::RobotNode,geom) = RobotNode(n.id,geom)
+
 struct ObjectNode <: SceneNode
     id::ObjectID
     geom::GeomNode
@@ -572,6 +583,9 @@ end
 ObjectNode(id::ObjectID,geom) = ObjectNode(id,geom,geom_hierarchy(geom))
 ObjectNode(n::ObjectNode,geom) = ObjectNode(n.id,geom)
 has_component(n::SceneNode,id) = false
+# Necessary for copying
+RobotNode{R}(n::RobotNode,args...) where {R} = RobotNode(n.id,args...)
+
 struct AssemblyNode <: SceneNode
     id::AssemblyID
     geom::GeomNode
@@ -592,9 +606,6 @@ struct TransportUnitNode <: SceneNode
     robots::TransformDict{BotID} # must be filled with unique invalid ids
     geom_hierarchy::GeometryHierarchy
 end
-# TransportUnitNode(id::TransportUnitID,a::Pair,args...) = TransportUnitNode(id,
-#     convert(Pair{AssemblyID,CoordinateTransformations.Transformation},a),
-#     args...)
 TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(n.id,geom,n.assembly,n.robots,geom_hierarchy(geom))
 TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}(),geom_hierarchy(geom))
 TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
@@ -609,11 +620,6 @@ child_transform(n::TransportUnitNode,id::BotID)     = robot_team(n)[id]
 add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
 
-# Necessary for copying
-RobotNode{R}(n::RobotNode,args...) where {R} = RobotNode(n.id,args...)
-# for T in (:ObjectNode,:AssemblyNode,:TransportUnitNode)
-#     @eval $T{R}(n::$T,args...) where {R} = $T(n,args...)
-# end
 
 """
     abstract type SceneTreeEdge

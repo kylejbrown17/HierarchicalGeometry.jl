@@ -223,9 +223,21 @@ let
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
 
+    base_tree = deepcopy(tree)
+
+    # Verify that edge removal affects graph edges and "hidden" transform tree 
+    # structure.
+    rem_edge!(tree,TransportUnitID(1),AssemblyID(1))
+    n = HierarchicalGeometry.get_transform_node(get_node(tree,AssemblyID(1)))
+    @test get_parent(n) == n
+    # Test that nodes don't "jump" when the edge is broken
+    for v in LightGraphs.vertices(tree)
+        @test array_isapprox(global_transform(tree,v).translation,t.translation)
+    end
+
     # # test copy behavior of nodes only
-    set_local_transform!(tree,TransportUnitID(1),identity_linear_map())
-    base_tree = tree
+    set_local_transform!(base_tree,TransportUnitID(1),identity_linear_map())
+    # base_tree = tree
     # t = CoordinateTransformations.Translation(1.0,0.0,0.0)
     # tree = deepcopy(base_tree)
     # for v in LightGraphs.vertices(tree)
