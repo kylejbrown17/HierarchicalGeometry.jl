@@ -181,7 +181,7 @@ end
 
 Has a parent field that points to another TransformNode.
 """
-mutable struct TransformNode <: AbstractTreeNode{TransformNodeID}
+mutable struct TransformNode <: CachedTreeNode{TransformNodeID}
     id::TransformNodeID
     local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
     global_transform::CachedElement{CoordinateTransformations.Transformation}
@@ -199,26 +199,6 @@ mutable struct TransformNode <: AbstractTreeNode{TransformNodeID}
         return t
     end
 end
-GraphUtils.time_stamp(n::TransformNode) = time_stamp(n.global_transform)
-function tf_up_to_date(n::TransformNode)
-    if is_up_to_date(n.global_transform)
-        if !(n === get_parent(n))
-            return time_stamp(n) > time_stamp(get_parent(n))
-        else
-            return true
-        end
-    end
-    return false
-end
-function set_tf_up_to_date!(n::TransformNode,val=true) 
-    set_up_to_date!(n.global_transform,val)
-    if val == false
-        for (id,child) in get_children(n)
-            set_tf_up_to_date!(child,val)
-        end
-    end
-    return n
-end
 function TransformNode()
     TransformNode(identity_linear_map(),CachedElement(identity_linear_map()))
 end
@@ -228,26 +208,32 @@ function TransformNode(
     )
     TransformNode(a,CachedElement(b))
 end
+
+# Cached Tree interface
+GraphUtils.cached_element(n::TransformNode) = n.global_transform
+tf_up_to_date(n::TransformNode) = GraphUtils.cached_node_up_to_date(n)
+set_tf_up_to_date!(n::TransformNode,val=true) = GraphUtils.set_cached_node_up_to_date!(n,val)
 local_transform(n::TransformNode) = n.local_transform
-function set_global_transform!(n::TransformNode,t)
-    update_element!(n.global_transform,t)
-    for (id,child) in get_children(n)
-        set_tf_up_to_date!(child,false)
+set_global_transform!(n::TransformNode,t,args...) = GraphUtils.update_element!(n,t,args...)
+global_transform(n::TransformNode) = GraphUtils.get_cached_value!(n)
+function GraphUtils.propagate_forward!(parent::TransformNode,child::TransformNode) 
+    if parent === child
+        set_global_transform!(child,local_transform(child))
+    else
+        set_global_transform!(child,global_transform(parent) ∘ local_transform(child))
     end
-    return t
 end
-function global_transform(n::TransformNode)
-    if !tf_up_to_date(n)
-        if !(n === n.parent)
-            set_global_transform!(n,global_transform(n.parent) ∘ local_transform(n))
-        else
-            # If n has no parent, just return its local transform
-            set_global_transform!(n,local_transform(n))
-            @warn "$n is a root transform node."
-        end
-    end
-    return get_element(n.global_transform)
-end
+# function global_transform(n::TransformNode)
+#     if !tf_up_to_date(n)
+#         if !(n === n.parent)
+#             set_global_transform!(n,global_transform(n.parent) ∘ local_transform(n))
+#         else
+#             # If n has no parent, just return its local transform
+#             set_global_transform!(n,local_transform(n))
+#         end
+#     end
+#     return get_element(n.global_transform)
+# end
 function set_local_transform!(n::TransformNode,t,update=false)
     n.local_transform = t
     set_tf_up_to_date!(n,false)
