@@ -111,12 +111,14 @@ let
     a = TransformNode()
     b = TransformNode()
     c = TransformNode()
-    tree = GraphUtils.CustomNTree{typeof(a),Symbol}()
+    tree = GraphUtils.CustomNTree{CustomNode{typeof(a),Symbol},Symbol}()
     add_node!(tree,a,:ONE)
-    add_node!(tree,b,:TWO)
-    add_node!(tree,c,:THREE)
-    set_child!(tree,:ONE,:TWO)
-    set_child!(tree,:TWO,:THREE)
+    add_child!(tree,:ONE,b,:TWO)
+    add_child!(tree,:TWO,c,:THREE)
+    # add_node!(tree,b,:TWO)
+    # add_node!(tree,c,:THREE)
+    # set_child!(tree,:ONE,:TWO)
+    # set_child!(tree,:TWO,:THREE)
     t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
     set_local_transform!(tree,1,t)
     @test !GraphUtils.cached_node_up_to_date(a)
@@ -135,12 +137,14 @@ let
             (TransformNode(),TransformNode(),TransformNode(),TransformNode()), 
             (GeomNode(geom),GeomNode(geom),GeomNode(geom),GeomNode(geom)),
             ]
-        tree = GraphUtils.CustomNTree{typeof(a),Symbol}()
+        tree = GraphUtils.CustomNTree{CustomNode{typeof(a),Symbol},Symbol}()
         add_node!(tree,a,:ONE)
-        add_node!(tree,b,:TWO)
-        add_node!(tree,c,:THREE)
-        set_child!(tree,:ONE,:TWO)
-        set_child!(tree,:TWO,:THREE)
+        add_child!(tree,:ONE,b,:TWO)
+        add_child!(tree,:TWO,c,:THREE)
+        # add_node!(tree,b,:TWO)
+        # add_node!(tree,c,:THREE)
+        # set_child!(tree,:ONE,:TWO)
+        # set_child!(tree,:TWO,:THREE)
         t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
         tree2 = deepcopy(tree) # Test deferred computation of transformations
         tree3 = deepcopy(tree) # Test deferred computation of transformations
@@ -149,17 +153,12 @@ let
             set_local_transform!(tree2,v,t,true) # update successors immediately
             set_local_transform!(tree3,v,t,false) # defer update of predecessors
         end
-        # for v in LightGraphs.vertices(tree)
-        #     # Global transform not updated because query does not include tree. Should throw warning
-        #     @test array_isapprox(global_transform(get_node(tree,v)).translation,[0.0, 0.0, 0.0])
-        # end
         for v in LightGraphs.vertices(tree)
             # Now transforms will be updated because query is made with tree
             @test array_isapprox(global_transform(tree,v).translation,[v, 0.0, 0.0])
             @test array_isapprox(global_transform(tree2,v).translation,[v, 0.0, 0.0])
             @test array_isapprox(global_transform(tree3,v).translation,[v, 0.0, 0.0])
         end
-        # update_transform_tree!(tree,:ONE)
         for v in LightGraphs.vertices(tree)
             @test array_isapprox(global_transform(tree,v).translation,[v, 0.0, 0.0])
         end
@@ -184,15 +183,16 @@ let
     geom = Ball2(ones(SVector{3,Float64}),1.0)
     n = GeomNode(geom)
     @test array_isapprox(get_base_geom(n).center,geom.center)
-    set_up_to_date!(n,true)
-    @test is_up_to_date(n)
+    # set_up_to_date!(n,true)
+    # @test is_up_to_date(n)
     t = compose(CoordinateTransformations.Translation(1.0,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
-    set_global_transform!(n,t)
-    @test !is_up_to_date(n)
+    set_local_transform!(n,t)
+    # set_global_transform!(n,t)
+    # @test !is_up_to_date(n)
     @test array_isapprox(get_cached_geom(n).center, geom.center .+ [t.translation.data...])
-    @test is_up_to_date(n)
-    set_global_transform!(n,t)
-    @test !is_up_to_date(n)
+    # @test is_up_to_date(n)
+    # set_global_transform!(n,t)
+    # @test !is_up_to_date(n)
 end
 # Test SceneTree
 let
@@ -223,27 +223,27 @@ let
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
 
-    # test copy behavior of nodes only
+    # # test copy behavior of nodes only
     set_local_transform!(tree,TransportUnitID(1),identity_linear_map())
     base_tree = tree
-    t = CoordinateTransformations.Translation(1.0,0.0,0.0)
-    tree = deepcopy(base_tree)
-    for v in LightGraphs.vertices(tree)
-        n = get_node(tree,v)
-        set_up_to_date!(n,true)
-        n2 = copy(n) # Compare to a copy that's still attached to the tree
-        n3 = copy(n) # Compare to a copy that's not attached to the tree
-        set_up_to_date!(n,false)
-        set_up_to_date!(n3,false)
-        @test is_up_to_date(n2)
-        @test is_up_to_date(n) != is_up_to_date(n2)
-        @test is_up_to_date(n3) != is_up_to_date(n2)
-        tn = t ∘ global_transform(n)
-        set_global_transform!(n,tn)
-        set_global_transform!(n3,tn)
-        @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
-        @test isapprox(norm(get_cached_geom(n3).center - get_cached_geom(n2).center),norm(t.translation))
-    end
+    # t = CoordinateTransformations.Translation(1.0,0.0,0.0)
+    # tree = deepcopy(base_tree)
+    # for v in LightGraphs.vertices(tree)
+    #     n = get_node(tree,v)
+    #     set_up_to_date!(n,true)
+    #     n2 = copy(n) # Compare to a copy that's still attached to the tree
+    #     n3 = copy(n) # Compare to a copy that's not attached to the tree
+    #     set_up_to_date!(n,false)
+    #     set_up_to_date!(n3,false)
+    #     @test is_up_to_date(n2)
+    #     @test is_up_to_date(n) != is_up_to_date(n2)
+    #     @test is_up_to_date(n3) != is_up_to_date(n2)
+    #     tn = t ∘ global_transform(n)
+    #     set_global_transform!(n,tn)
+    #     set_global_transform!(n3,tn)
+    #     @test isapprox(norm(get_cached_geom(n).center - get_cached_geom(n2).center),norm(t.translation))
+    #     @test isapprox(norm(get_cached_geom(n3).center - get_cached_geom(n2).center),norm(t.translation))
+    # end
 
     tree = copy(base_tree)
     for v in LightGraphs.vertices(tree)

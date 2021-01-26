@@ -186,7 +186,7 @@ mutable struct TransformNode <: CachedTreeNode{TransformNodeID}
     local_transform::CoordinateTransformations.Transformation # transform from the parent frame to the child frame
     global_transform::CachedElement{CoordinateTransformations.Transformation}
     parent::TransformNode # parent node
-    children::Dict{TransformNodeID,TransformNode}
+    children::Dict{AbstractID,CachedTreeNode}
     function TransformNode(
             a::CoordinateTransformations.Transformation,
             b::CachedElement)
@@ -195,7 +195,8 @@ mutable struct TransformNode <: CachedTreeNode{TransformNodeID}
         t.local_transform = a
         t.global_transform = b
         t.parent = t
-        t.children = Dict{TransformNodeID,TransformNodeID}()
+        # t.children = Dict{TransformNodeID,TransformNodeID}()
+        t.children = Dict{AbstractID,CachedTreeNode}()
         return t
     end
 end
@@ -208,7 +209,14 @@ function TransformNode(
     )
     TransformNode(a,CachedElement(b))
 end
-
+# TODO copying as currently implemented will cause major issues with 
+function Base.copy(n::TransformNode)
+    node = TransformNode(
+    deepcopy(n.local_transform),
+    deepcopy(n.global_transform))
+    # Don't want to copy parent or children. Just need to reconnect later.
+    return node
+end
 # Cached Tree interface
 GraphUtils.cached_element(n::TransformNode) = n.global_transform
 tf_up_to_date(n::TransformNode) = GraphUtils.cached_node_up_to_date(n)
@@ -235,10 +243,12 @@ const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:glob
 const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!]
 
 for op in transform_node_accessor_interface
-    @eval $op(tree,v) = $op(get_node(tree,v))
+    @eval $op(tree::AbstractCustomTree,v) = $op(get_node(tree,v))
+    @eval $op(tree::AbstractCustomTree,n::TransformNode) = $op(n)
 end
 for op in transform_node_mutator_interface
     @eval $op(tree::AbstractCustomTree,v,args...) = $op(get_node(tree,v),args...)
+    @eval $op(tree::AbstractCustomTree,n::TransformNode,args...) = $op(n,args...)
 end
 
 export
@@ -266,87 +276,106 @@ function set_child!(tree::AbstractCustomTree,parent,child,
     return false
 end
 const transform_tree_mutator_interface = [:set_local_transform!,:set_global_transform!]
+function GraphUtils.add_child!(tree::AbstractCustomTree,parent,child,child_id)
+    n = add_node!(tree,child,child_id)
+    if set_child!(tree,get_node(tree,parent),child_id)
+        return n
+    else
+        rem_node!(tree,child_id)
+        return nothing
+    end
+end
 
 export
     GeomNode,
     get_base_geom,
     get_cached_geom
 
-struct GeomNode{G}
+@with_kw struct GeomID <: AbstractID
+    id::Int = -1
+end
+
+mutable struct GeomNode{G} <: CachedTreeNode{GeomID}
+    id::GeomID
     base_geom::G
-    transform_node::TransformNode
+    parent::TransformNode
+    # transform_node::TransformNode
     cached_geom::CachedElement{G}
 end
 function GeomNode(geom)
-    GeomNode(geom,TransformNode(),CachedElement(geom))
+    GeomNode(get_unique_id(GeomID),geom,TransformNode(),CachedElement(geom))
 end
+GraphUtils.get_children(n::GeomNode) = Dict{AbstractID,CachedTreeNode}()
+# GraphUtils.get_parent(n::GeomNode) = n.transform_node
+GraphUtils.cached_element(n::GeomNode) = n.cached_geom
+set_cached_geom!(n::GeomNode,geom) = update_element!(n,geom)
+
 get_base_geom(n::GeomNode) = n.base_geom
-for op in cached_element_accessor_interface
-    @eval $op(g::GeomNode) = $op(g.cached_geom)
-end
-for op in cached_element_mutator_interface
-    @eval $op(g::GeomNode,val) = $op(g.cached_geom,val)
-end
+get_transform_node(n::GeomNode) = n.parent
+# for op in cached_element_accessor_interface
+#     @eval $op(g::GeomNode) = $op(g.cached_geom)
+# end
+# for op in cached_element_mutator_interface
+#     @eval $op(g::GeomNode,val) = $op(g.cached_geom,val)
+# end
 for op in transform_node_accessor_interface
-    @eval $op(g::GeomNode,args...) = $op(g.transform_node)
+    @eval $op(g::GeomNode,args...) = $op(get_transform_node(g))
 end
 for op in transform_node_mutator_interface
-    @eval $op(g::GeomNode,args...) = $op(g.transform_node,args...)
+    @eval $op(g::GeomNode,args...) = $op(get_transform_node(g),args...)
 end
-# set_tf_up_to_date!(n::GeomNode,val) = set_tf_up_to_date!(n.transform_node,val)
-# function set_local_transform!(n::GeomNode,t)
-#     set_up_to_date!(n,false)
-#     set_local_transform!(n.transform_node,t)
-# end
-# function set_global_transform!(n::GeomNode,t)
-#     set_up_to_date!(n,false)
-#     set_global_transform!(n.transform_node,t)
-# end
 function GraphUtils.set_parent!(a::GeomNode,b::GeomNode)
-    set_parent!(a.transform_node,b.transform_node)
+    set_parent!(get_transform_node(a),get_transform_node(b))
 end
-function GraphUtils.propagate_forward!(a::GeomNode,b::GeomNode)
-    GraphUtils.propagate_forward!(a.transform_node,b.transform_node)
+# function GraphUtils.propagate_forward!(a::GeomNode,b::GeomNode)
+#     GraphUtils.propagate_forward!(get_transform_node(a),get_transform_node(b))
+# end
+function GraphUtils.propagate_forward!(t::TransformNode,n::GeomNode)
+    transformed_geom = transform(get_base_geom(n),global_transform(n))
+    set_cached_geom!(n,transformed_geom)
 end
+
 
 """
     get_cached_geom(n::GeomNode)
 
 If `n.cached_geom` is out of date, transform it according to
-`global_transform(n)`. Note that nothing can be done if `global_transform(n)` is
-out of date, since this function call doesn't include the tree.
+`global_transform(n)`. Updates both the global transform and geometry if 
+necessary.
 """
-function get_cached_geom(n::GeomNode)
-    if !is_up_to_date(n)
-        transformed_geom = transform(get_base_geom(n),global_transform(n))
-        update_element!(n,transformed_geom)
-    end
-    return get_element(n.cached_geom)
-end
-"""
-    get_cached_geom(tree,v)
-
-returns the cached geometry associated with vertex `v`, updating both the
-global transform and geometry if necessary.
-"""
-function get_cached_geom(tree,v)
-    n = get_node(tree,v)
-    if !is_up_to_date(n)
-        transformed_geom = transform(get_base_geom(n),global_transform(tree,v))
-        update_element!(n,transformed_geom)
-    end
-    return get_element(n.cached_geom)
-end
+get_cached_geom(n::GeomNode) = GraphUtils.get_cached_value!(n)
+get_cached_geom(tree::AbstractCustomTree,v) = get_cached_geom(get_node(tree,v))
+# function get_cached_geom(n::GeomNode)
+#     if !is_up_to_date(n)
+#         transformed_geom = transform(get_base_geom(n),global_transform(n))
+#         update_element!(n,transformed_geom)
+#     end
+#     return get_element(n.cached_geom)
+# end
+# """
+#     get_cached_geom(tree,v)
+# returns the cached geometry associated with vertex `v`, updating both the
+# global transform and geometry if necessary.
+# """
+# function get_cached_geom(tree,v)
+#     n = get_node(tree,v)
+#     if !is_up_to_date(n)
+#         transformed_geom = transform(get_base_geom(n),global_transform(tree,v))
+#         update_element!(n,transformed_geom)
+#     end
+#     return get_element(n.cached_geom)
+# end
 distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(get_cached_geom(a),get_cached_geom(b))
 const geom_node_accessor_interface = [
-    cached_element_accessor_interface...,
+    # cached_element_accessor_interface...,
     transform_node_accessor_interface...,
     :get_base_geom, :get_cached_geom,
     ]
 const geom_node_mutator_interface = [
-    cached_element_mutator_interface...,
+    # cached_element_mutator_interface...,
     transform_node_mutator_interface...
 ]
+
 """
     Base.copy(n::GeomNode)
 
@@ -354,8 +383,9 @@ Shares `n.base_geom`, deepcopies `n.transform_node`, and copies `n.cached_geom`
 (see documenation for `Base.copy(::CachedElement)`).
 """
 Base.copy(n::GeomNode) = GeomNode(
+    get_unique_id(GeomID),
     n.base_geom,
-    deepcopy(n.transform_node),
+    copy(get_transform_node(n)),
     copy(n.cached_geom)
 )
 
@@ -411,6 +441,17 @@ abstract type SceneAssemblyNode <: SceneNode end
 # SceneNode interface
 GraphUtils.node_id(n::SceneNode) = n.id
 
+for op in geom_node_accessor_interface
+    @eval $op(n::SceneNode) = $op(n.geom)
+    @eval $op(n::CustomNode) = $op(node_val(n))
+end
+for op in geom_node_mutator_interface
+    @eval $op(n::SceneNode,args...) = $op(n.geom,args...)
+    @eval $op(n::CustomNode,args...) = $op(node_val(n),args...)
+end
+GraphUtils.set_parent!(a::SceneNode,b::SceneNode) = set_parent!(a.geom,b.geom)
+GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),node_val(b))
+
 """
     required_transforms_to_children(n::SceneNode)
 
@@ -434,17 +475,6 @@ function required_parent end
 Returns the required transform relative to the parent.
 """
 function required_transform_to_parent end
-
-for op in geom_node_accessor_interface
-    @eval $op(n::SceneNode) = $op(n.geom)
-    @eval $op(n::CustomNode) = $op(node_val(n))
-end
-for op in geom_node_mutator_interface
-    @eval $op(n::SceneNode,args...) = $op(n.geom,args...)
-    @eval $op(n::CustomNode,args...) = $op(node_val(n),args...)
-end
-GraphUtils.set_parent!(a::SceneNode,b::SceneNode) = set_parent!(a.geom,b.geom)
-GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),node_val(b))
 
 """
     Base.copy(n::N) where {N<:SceneNode}
