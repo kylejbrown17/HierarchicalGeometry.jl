@@ -521,6 +521,9 @@ for op in geom_node_mutator_interface
 end
 GraphUtils.set_parent!(a::SceneNode,b::SceneNode) = set_parent!(a.geom,b.geom)
 GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),node_val(b))
+GraphUtils.rem_parent!(a::GeomNode) = rem_parent!(get_transform_node(a))
+GraphUtils.rem_parent!(a::SceneNode) = rem_parent!(a.geom)
+GraphUtils.rem_parent!(a::CustomNode) = rem_parent!(node_val(a))
 
 """
     required_transforms_to_children(n::SceneNode)
@@ -701,6 +704,7 @@ function LightGraphs.rem_edge!(tree::SceneTree,u,v)
         return true
     end
     @assert !isa(get_edge(tree,u,v),PermanentEdge) "Edge $u → $v is permanent!"
+    rem_parent!(get_node(tree,v))
     GraphUtils.delete_edge!(tree,u,v)
 end
 
