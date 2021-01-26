@@ -203,7 +203,7 @@ let
     add_node!(tree,ObjectNode(ObjectID(1),GeomNode(deepcopy(geom))))
     add_node!(tree,AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom))))
     add_component!(get_node(tree,AssemblyID(1)), ObjectID(1)=>identity_linear_map())
-    n = add_node!(tree,TransportUnitNode(1,GeomNode(deepcopy(geom)),AssemblyID(1)))
+    n = add_node!(tree,TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),AssemblyID(1)))
     add_robot!(n,RobotID(1)=>identity_linear_map())
 
     @test_throws AssertionError set_child!(tree,ObjectID(1),RobotID(1))
@@ -316,7 +316,7 @@ let
         - HierarchicalGeometry.child_transform(n2,ObjectID(1)).translation),
         0.0)
 
-    n = TransportUnitNode(1,GeomNode(deepcopy(geom)),AssemblyID(1))
+    n = TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),AssemblyID(1))
     add_robot!(n,RobotID(1)=>identity_linear_map())
     n2 = copy(n)
     add_robot!(n2,RobotID(1)=>identity_linear_map() ∘ t)

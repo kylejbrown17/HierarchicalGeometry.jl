@@ -298,26 +298,21 @@ end
 mutable struct GeomNode{G} <: CachedTreeNode{GeomID}
     id::GeomID
     base_geom::G
-    parent::TransformNode
-    # transform_node::TransformNode
+    parent::TransformNode 
     cached_geom::CachedElement{G}
 end
 function GeomNode(geom)
     GeomNode(get_unique_id(GeomID),geom,TransformNode(),CachedElement(geom))
 end
+function GeomNode(geom,tf)
+    GeomNode(get_unique_id(GeomID),geom,tf,CachedElement(geom))
+end
 GraphUtils.get_children(n::GeomNode) = Dict{AbstractID,CachedTreeNode}()
-# GraphUtils.get_parent(n::GeomNode) = n.transform_node
 GraphUtils.cached_element(n::GeomNode) = n.cached_geom
 set_cached_geom!(n::GeomNode,geom) = update_element!(n,geom)
 
 get_base_geom(n::GeomNode) = n.base_geom
 get_transform_node(n::GeomNode) = n.parent
-# for op in cached_element_accessor_interface
-#     @eval $op(g::GeomNode) = $op(g.cached_geom)
-# end
-# for op in cached_element_mutator_interface
-#     @eval $op(g::GeomNode,val) = $op(g.cached_geom,val)
-# end
 for op in transform_node_accessor_interface
     @eval $op(g::GeomNode,args...) = $op(get_transform_node(g))
 end
@@ -327,9 +322,6 @@ end
 function GraphUtils.set_parent!(a::GeomNode,b::GeomNode)
     set_parent!(get_transform_node(a),get_transform_node(b))
 end
-# function GraphUtils.propagate_forward!(a::GeomNode,b::GeomNode)
-#     GraphUtils.propagate_forward!(get_transform_node(a),get_transform_node(b))
-# end
 function GraphUtils.propagate_forward!(t::TransformNode,n::GeomNode)
     transformed_geom = transform(get_base_geom(n),global_transform(n))
     set_cached_geom!(n,transformed_geom)
@@ -345,34 +337,12 @@ necessary.
 """
 get_cached_geom(n::GeomNode) = GraphUtils.get_cached_value!(n)
 get_cached_geom(tree::AbstractCustomTree,v) = get_cached_geom(get_node(tree,v))
-# function get_cached_geom(n::GeomNode)
-#     if !is_up_to_date(n)
-#         transformed_geom = transform(get_base_geom(n),global_transform(n))
-#         update_element!(n,transformed_geom)
-#     end
-#     return get_element(n.cached_geom)
-# end
-# """
-#     get_cached_geom(tree,v)
-# returns the cached geometry associated with vertex `v`, updating both the
-# global transform and geometry if necessary.
-# """
-# function get_cached_geom(tree,v)
-#     n = get_node(tree,v)
-#     if !is_up_to_date(n)
-#         transformed_geom = transform(get_base_geom(n),global_transform(tree,v))
-#         update_element!(n,transformed_geom)
-#     end
-#     return get_element(n.cached_geom)
-# end
 distance_lower_bound(a::GeomNode{G},b::GeomNode{G}) where {G<:Union{BallType,RectType}} = distance_lower_bound(get_cached_geom(a),get_cached_geom(b))
 const geom_node_accessor_interface = [
-    # cached_element_accessor_interface...,
     transform_node_accessor_interface...,
     :get_base_geom, :get_cached_geom,
     ]
 const geom_node_mutator_interface = [
-    # cached_element_mutator_interface...,
     transform_node_mutator_interface...
 ]
 
@@ -419,9 +389,7 @@ end
 @with_kw struct TransportUnitID <: AbstractID
     id::Int = -1
 end
-# struct BaseNode <: SceneNode
-#     id::VtxID
-# end
+
 """
     abstract type SceneNode
 
@@ -436,8 +404,8 @@ current parent)
 - Required transform relative to parent (if applicable)
 
 """
-abstract type SceneNode end
-abstract type SceneAssemblyNode <: SceneNode end
+abstract type SceneNode{G} end
+abstract type SceneAssemblyNode{G} <: SceneNode{G} end
 # SceneNode interface
 GraphUtils.node_id(n::SceneNode) = n.id
 
@@ -484,41 +452,44 @@ Shares `n.base_geom`, deepcopies `n.transform_node`, and copies `n.cached_geom`
 """
 Base.copy(n::N) where {N<:SceneNode} = N(n,copy(n.geom))
 
-struct RobotNode{R} <: SceneNode
+struct RobotNode{R,G} <: SceneNode{G}
     id::BotID{R}
-    geom::GeomNode
+    geom::G
 end
-RobotNode{R}(n::RobotNode,geom::GeomNode) where {R} = RobotNode(n.id,geom)
-RobotNode(n::RobotNode,geom::GeomNode) = RobotNode(n.id,geom)
-struct ObjectNode <: SceneNode
+RobotNode(n::RobotNode,geom) = RobotNode(n.id,geom)
+struct ObjectNode{G} <: SceneNode{G}
     id::ObjectID
-    geom::GeomNode
+    geom::G
 end
-ObjectNode(n::ObjectNode,geom::GeomNode) = ObjectNode(n.id,geom)
+ObjectNode(n::ObjectNode,geom) = ObjectNode(n.id,geom)
 has_component(n::SceneNode,id) = false
-struct AssemblyNode <: SceneNode
+struct AssemblyNode{G} <: SceneNode{G}
     id::AssemblyID
-    geom::GeomNode
+    geom::G
     components::TransformDict{Union{ObjectID,AssemblyID}}
 end
-AssemblyNode(n::AssemblyNode,geom::GeomNode) = AssemblyNode(n.id,geom,n.components)
+AssemblyNode(n::AssemblyNode,geom) = AssemblyNode(n.id,geom,n.components)
 AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}())
 components(n::AssemblyNode)         = n.components
 add_component!(n::AssemblyNode,p)   = push!(n.components,p)
 has_component(n::AssemblyNode,id)   = haskey(components(n),id)
 child_transform(n::AssemblyNode,id) = components(n)[id]
 
-struct TransportUnitNode <: SceneNode
+struct TransportUnitNode{G} <: SceneNode{G}
     id::TransportUnitID
-    geom::GeomNode
     assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
     robots::TransformDict{BotID} # must be filled with unique invalid ids
+    geom::G
 end
-TransportUnitNode(n::TransportUnitNode,geom::GeomNode) = TransportUnitNode(n.id,geom,n.assembly,n.robots)
-TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}())
+TransportUnitNode(id::TransportUnitID,a::Pair,args...) = TransportUnitNode(id,
+    convert(Pair{AssemblyID,CoordinateTransformations.Transformation},a),
+    args...)
+TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(n.id,n.assembly,n.robots,geom)
+TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,assembly,TransformDict{BotID}(),geom)
 TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
 robot_team(n::TransportUnitNode) = n.robots
 assembly_id(n::TransportUnitNode) = n.assembly.first
+Base.convert(::Pair{A,B},pair) where {A,B} = convert(A,pair.first)=>convert(B,p.second) 
 
 has_component(n::TransportUnitNode,id::AssemblyID)  = id == assembly_id(n)
 has_component(n::TransportUnitNode,id::BotID)       = haskey(robot_team(n),id)
@@ -526,6 +497,12 @@ child_transform(n::TransportUnitNode,id::AssemblyID) = n.assembly.second
 child_transform(n::TransportUnitNode,id::BotID)     = robot_team(n)[id]
 add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
+
+# Necessary for copying
+RobotNode{R,G}(n::RobotNode,args...) where {R,G} = RobotNode(n.id,args...)
+for T in (:ObjectNode,:AssemblyNode,:TransportUnitNode)
+    @eval $T{R}(n::$T,args...) where {R} = $T(n,args...)
+end
 
 """
     abstract type SceneTreeEdge
@@ -584,9 +561,9 @@ GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,n.id)
 function Base.copy(tree::SceneTree)
     SceneTree(
         graph = deepcopy(tree.graph),
-        nodes = map(copy, tree.nodes),
-        vtx_map = deepcopy(tree.vtx_map), # TODO would a shallow copy be fine?
-        vtx_ids = deepcopy(tree.vtx_ids) # TODO would a shallow copy be fine?
+        nodes = map(copy, tree.nodes), # TODO This may cause problems with TransformNode
+        vtx_map = deepcopy(tree.vtx_map),
+        vtx_ids = deepcopy(tree.vtx_ids)
     )
 end
 
@@ -739,48 +716,7 @@ function find_collision(table,env_state,env,i,t=0)
     return false, -1
 end
 
-
-
 export GeometryHierarchy
-"""
-    GeometryHierarchy
-
-A hierarchical representation of geometry
-Fields:
-* graph - encodes the hierarchy of geometries
-* nodes - geometry nodes
-"""
-@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,Symbol}
-    graph               ::DiGraph               = DiGraph()
-    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
-    vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
-    vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
-end
-
-distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
-function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=:Hypersphere)
-    v = get_vtx(a,leaf_id)
-    while has_vertex(a,v)
-        k = get_vtx_id(a,v)
-        if has_vertex(b,k)
-            if !has_overlap(get_node(a,k),get_node(b,k))
-                return false
-            end
-        end
-        v = get_parent(a,k)
-    end
-    return true
-end
-
-export add_child_approximation!
-function add_child_approximation!(g,model,parent_id,child_id)
-    @assert has_vertex(g,parent_id)
-    @assert !has_vertex(g,child_id)
-    geom = overapproximate(get_base_geom(get_node(g,parent_id)),model)
-    add_node!(g,GeomNode(geom),child_id)
-    add_edge!(g,parent_id,child_id)
-    return g
-end
 
 abstract type GeometryKey end
 """ 
@@ -806,16 +742,74 @@ struct HyperrectangleKey <: GeometryKey end
 struct HypersphereKey <: GeometryKey end
 struct CylinderKey <: GeometryKey end
 
+construct_child_approximation(::PolyhedronKey,geom)     = LazySets.overapproximate(geom,equatorial_overapprox_model())
+construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2)
+construct_child_approximation(::HyperrectangleKey,geom) = LazySets.overapproximate(geom,Hyperrectangle)
+
+"""
+    GeometryHierarchy
+
+A hierarchical representation of geometry
+Fields:
+* graph - encodes the hierarchy of geometries
+* nodes - geometry nodes
+"""
+@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,GeometryKey}
+    graph               ::DiGraph               = DiGraph()
+    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
+    vtx_map             ::Dict{GeometryKey,Int} = Dict{GeometryKey,Int}()
+    vtx_ids             ::Vector{GeometryKey}   = Vector{GeometryKey}() # maps vertex uid to actual graph node
+end
+# TODO How to safely copy? All nodes have the same parent.
+
+distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(
+    get_node(a,HypersphereKey()),
+    get_node(b,HypersphereKey())
+    )
+function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=HypersphereKey())
+    v = get_vtx(a,leaf_id)
+    while has_vertex(a,v)
+        k = get_vtx_id(a,v)
+        if has_vertex(b,k)
+            if !has_overlap(get_node(a,k),get_node(b,k))
+                return false
+            end
+        end
+        v = get_parent(a,k)
+    end
+    return true
+end
+
+export add_child_approximation!
+function add_child_approximation!(g::GeometryHierarchy,parent_id,child_id)
+    @assert has_vertex(g,parent_id)
+    @assert !has_vertex(g,child_id)
+    node = get_node(g,parent_id)
+    # geom = overapproximate(get_base_geom(node),model)
+    geom = construct_child_approximation(child_id,get_base_geom(node))
+    add_node!(g,
+        GeomNode(geom,node.parent), # Share parent
+        child_id
+        ) # todo needs parent
+    add_edge!(g,parent_id,child_id)
+    return g
+end
+
+
 export construct_geometry_tree!
 """
-    TODO: The default behavior should dispatch on the geometry type. We may not
-    care for all successive approximations with e.g., a large assembly.
+
+TODO: Ensure that the parent member of the base geometry key is the parent 
+of the SceneNode to which the Geometry Hierarchy is bound.
 """
-function construct_geometry_tree!(g,geom)
-    add_node!(g,GeomNode(geom),:BaseGeom)
-    add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
-    add_child_approximation!(g,Hyperrectangle,:Polyhedron,:Hyperrectangle)
-    add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
+function construct_geometry_tree!(g::GeometryHierarchy,geom::GeomNode)
+    add_node!(g,geom,BaseGeomKey())
+    add_child_approximation!(g,BaseGeomKey(),PolyhedronKey())
+    add_child_approximation!(g,PolyhedronKey(),HyperrectangleKey())
+    add_child_approximation!(g,PolyhedronKey(),HypersphereKey())
 end
+construct_geometry_tree!(g::GeometryHierarchy,geom) = construct_geometry_tree!(g,GeomNode(geom))
+
+get_cached_geom(n::GeometryHierarchy) = get_cached_geom(n,BaseGeomKey())
 
 end
