@@ -60,6 +60,11 @@ transformed version `g`.
 (t::CoordinateTransformations.LinearMap)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
 (t::CoordinateTransformations.LinearMap)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
 
+"""
+For mapping a transform across a vector of elements.
+"""
+(t::CoordinateTransformations.AffineMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map() = identity_linear_map3()
@@ -397,7 +402,7 @@ struct HypersphereKey <: GeometryKey end
 struct CylinderKey <: GeometryKey end
 
 construct_child_approximation(::PolyhedronKey,geom)     = LazySets.overapproximate(geom,equatorial_overapprox_model())
-construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2)
+construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2{Float64,SVector{3,Float64}})
 construct_child_approximation(::HyperrectangleKey,geom) = LazySets.overapproximate(geom,Hyperrectangle)
 
 """
@@ -414,12 +419,13 @@ Fields:
     vtx_map             ::Dict{GeometryKey,Int} = Dict{GeometryKey,Int}()
     vtx_ids             ::Vector{GeometryKey}   = Vector{GeometryKey}() # maps vertex uid to actual graph node
 end
-# TODO How to safely copy? All nodes have the same parent.
 function geom_hierarchy(geom::GeomNode)
     h = GeometryHierarchy()
     add_node!(h,geom,BaseGeomKey())
     return h
 end
+get_cached_geom(n::GeometryHierarchy,k=BaseGeomKey()) = get_cached_geom(get_node(n,k))
+get_base_geom(n::GeometryHierarchy,k=BaseGeomKey()) = get_base_geom(get_node(n,k))
 
 distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(
     get_node(a,HypersphereKey()),
@@ -440,11 +446,10 @@ function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=Hypersphe
 end
 
 export add_child_approximation!
-function add_child_approximation!(g::GeometryHierarchy,parent_id,child_id)
+function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id=BaseGeomKey())
     @assert has_vertex(g,parent_id)
     @assert !has_vertex(g,child_id)
     node = get_node(g,parent_id)
-    # geom = overapproximate(get_base_geom(node),model)
     geom = construct_child_approximation(child_id,get_base_geom(node))
     add_node!(g,
         GeomNode(geom,node.parent), # Share parent
@@ -454,7 +459,6 @@ function add_child_approximation!(g::GeometryHierarchy,parent_id,child_id)
     return g
 end
 
-
 export construct_geometry_tree!
 """
 
@@ -463,13 +467,12 @@ of the SceneNode to which the Geometry Hierarchy is bound.
 """
 function construct_geometry_tree!(g::GeometryHierarchy,geom::GeomNode)
     add_node!(g,geom,BaseGeomKey())
-    add_child_approximation!(g,BaseGeomKey(),PolyhedronKey())
-    add_child_approximation!(g,PolyhedronKey(),HyperrectangleKey())
-    add_child_approximation!(g,PolyhedronKey(),HypersphereKey())
+    add_child_approximation!(g,PolyhedronKey(),BaseGeomKey())
+    add_child_approximation!(g,HyperrectangleKey(),PolyhedronKey())
+    add_child_approximation!(g,HypersphereKey(),PolyhedronKey())
 end
 construct_geometry_tree!(g::GeometryHierarchy,geom) = construct_geometry_tree!(g,GeomNode(geom))
 
-get_cached_geom(n::GeometryHierarchy) = get_cached_geom(n,BaseGeomKey())
 
 
 export
@@ -534,6 +537,14 @@ GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),no
 GraphUtils.rem_parent!(a::GeomNode) = rem_parent!(get_transform_node(a))
 GraphUtils.rem_parent!(a::SceneNode) = rem_parent!(a.geom)
 GraphUtils.rem_parent!(a::CustomNode) = rem_parent!(node_val(a))
+
+get_cached_geom(n::SceneNode,k::GeometryKey) = get_cached_geom(n.geom_hierarchy,k)
+get_base_geom(n::SceneNode,k::GeometryKey) = get_base_geom(n.geom_hierarchy,k)
+function add_child_approximation!(n::SceneNode,child,parent=BaseGeomKey())
+    add_child_approximation!(n.geom_hierarchy,child,parent)
+end
+
+
 
 """
     required_transforms_to_children(n::SceneNode)

@@ -64,21 +64,12 @@ end
 #     g = GeometryHierarchy()
 #     geom = LazySets.Ball2(zeros(3),1.0)
 #     construct_geometry_tree!(g,geom)
-#
-#     for v in LightGraphs.vertices(g)
-#         n = get_node(g,v)
-#         LazySets.translate(n.geom,[1.0,0.0,0.0])
-#     end
-#
-#     g = GeometryHierarchy()
+
+#     g2 = GeometryHierarchy()
 #     geom2 = LazySets.translate(geom,[3.0,0.0,0.0])
-#     add_node!(g,GeomNode(geom2),:BaseGeom)
 #     construct_geometry_tree!(g2,geom2)
-#
+
 #     distance_lower_bound(geom,geom2)
-#
-#     # add_node!(g,GeomNode(geom),:BaseGeom)
-#     # add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
 # end
 # let
 #     table = HierarchicalGeometry.CollisionTable{Int}()
