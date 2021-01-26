@@ -223,17 +223,6 @@ function GraphUtils.propagate_forward!(parent::TransformNode,child::TransformNod
         set_global_transform!(child,global_transform(parent) ∘ local_transform(child))
     end
 end
-# function global_transform(n::TransformNode)
-#     if !tf_up_to_date(n)
-#         if !(n === n.parent)
-#             set_global_transform!(n,global_transform(n.parent) ∘ local_transform(n))
-#         else
-#             # If n has no parent, just return its local transform
-#             set_global_transform!(n,local_transform(n))
-#         end
-#     end
-#     return get_element(n.global_transform)
-# end
 function set_local_transform!(n::TransformNode,t,update=false)
     n.local_transform = t
     set_tf_up_to_date!(n,false)
@@ -245,83 +234,18 @@ end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
 const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!]
 
+for op in transform_node_accessor_interface
+    @eval $op(tree,v) = $op(get_node(tree,v))
+end
+for op in transform_node_mutator_interface
+    @eval $op(tree::AbstractCustomTree,v,args...) = $op(get_node(tree,v),args...)
+end
+
 export
     set_child!,
     get_parent_transform,
     update_transform_tree!
 
-# @with_kw struct TransformTree{ID} <: AbstractCustomNTree{TransformNode,ID}
-#     graph               ::DiGraph               = DiGraph()
-#     nodes               ::Vector{TransformNode} = Vector{TransformNode}()
-#     vtx_map             ::Dict{ID,Int}          = Dict{ID,Int}()
-#     vtx_ids             ::Vector{ID}            = Vector{ID}()
-# end
-tf_up_to_date(tree,v) = tf_up_to_date(get_node(tree,v))
-local_transform(tree,v) = local_transform(get_node(tree,v))
-function get_parent_transform(g::AbstractCustomTree,v)
-    vp = get_parent(g,v)
-    if has_vertex(g,vp)
-        return global_transform(g,vp)
-    end
-    # @warn string("Node $v has no parent.",
-    # " Returning identity_linear_map() as parent transform")
-    return identity_linear_map()
-end
-"""
-    global_transform(tree,v)
-
-Return global transform of node `v` in `tree`. If the current global transform
-is out of date, backtrack until `v` and all of its ancestors are up to date.
-"""
-function global_transform(tree,v)
-    n = get_node(tree,v)
-    if !tf_up_to_date(n)
-        set_global_transform!(n,get_parent_transform(tree,v) ∘ local_transform(n))
-    end
-    return global_transform(n)
-end
-"""
-    update_transform_tree!(g::TransformTree,v)
-
-Updates the global transforms of `v` and its successors based on their local
-transforms.
-"""
-function update_transform_tree!(g::AbstractCustomTree,v)
-    n = get_node(g,v)
-    set_global_transform!(n,get_parent_transform(g,v) ∘ local_transform(n))
-    for vp in outneighbors(g,v)
-        update_transform_tree!(g,vp)
-    end
-    return g
-end
-"""
-    propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
-
-Calls `set_tf_up_to_date!(get_node(g,vp),val)` on v and all outneighbors thereof.
-Needs to be called by `set_local_transform!(g, ...)` unless
-`update_transform_tree!(g, ...)` is called instead.
-"""
-function propagate_tf_flag!(g::AbstractCustomTree,v,val=false)
-    n = get_node(g,v)
-    if tf_up_to_date(n)
-        return g
-    end
-    set_tf_up_to_date!(n,val) # Mark as
-    for vp in outneighbors(g,v)
-        propagate_tf_flag!(g,vp,val)
-    end
-    return g
-end
-function set_local_transform!(g::AbstractCustomTree,v,t,update=true)
-    set_local_transform!(get_node(g,v),t)
-    if update
-        update_transform_tree!(g,v)
-    else
-        propagate_tf_flag!(g,v,false)
-    end
-    # return g
-    return t
-end
 """
     set_child!(tree,parent,child,new_local_transform)
 
@@ -364,19 +288,25 @@ for op in cached_element_mutator_interface
     @eval $op(g::GeomNode,val) = $op(g.cached_geom,val)
 end
 for op in transform_node_accessor_interface
-    @eval $op(g::GeomNode) = $op(g.transform_node)
+    @eval $op(g::GeomNode,args...) = $op(g.transform_node)
 end
-set_tf_up_to_date!(n::GeomNode,val) = set_tf_up_to_date!(n.transform_node,val)
-function set_local_transform!(n::GeomNode,t)
-    set_up_to_date!(n,false)
-    set_local_transform!(n.transform_node,t)
+for op in transform_node_mutator_interface
+    @eval $op(g::GeomNode,args...) = $op(g.transform_node,args...)
 end
-function set_global_transform!(n::GeomNode,t)
-    set_up_to_date!(n,false)
-    set_global_transform!(n.transform_node,t)
-end
+# set_tf_up_to_date!(n::GeomNode,val) = set_tf_up_to_date!(n.transform_node,val)
+# function set_local_transform!(n::GeomNode,t)
+#     set_up_to_date!(n,false)
+#     set_local_transform!(n.transform_node,t)
+# end
+# function set_global_transform!(n::GeomNode,t)
+#     set_up_to_date!(n,false)
+#     set_global_transform!(n.transform_node,t)
+# end
 function GraphUtils.set_parent!(a::GeomNode,b::GeomNode)
     set_parent!(a.transform_node,b.transform_node)
+end
+function GraphUtils.propagate_forward!(a::GeomNode,b::GeomNode)
+    GraphUtils.propagate_forward!(a.transform_node,b.transform_node)
 end
 
 """
@@ -429,82 +359,6 @@ Base.copy(n::GeomNode) = GeomNode(
     copy(n.cached_geom)
 )
 
-export GeometryHierarchy
-"""
-    GeometryHierarchy
-
-A hierarchical representation of geometry
-Fields:
-* graph - encodes the hierarchy of geometries
-* nodes - geometry nodes
-"""
-@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,Symbol}
-    graph               ::DiGraph               = DiGraph()
-    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
-    vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
-    vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
-end
-
-distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
-function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=:Hypersphere)
-    v = get_vtx(a,leaf_id)
-    while has_vertex(a,v)
-        k = get_vtx_id(a,v)
-        if has_vertex(b,k)
-            if !has_overlap(get_node(a,k),get_node(b,k))
-                return false
-            end
-        end
-        v = get_parent(a,k)
-    end
-    return true
-end
-
-export add_child_approximation!
-function add_child_approximation!(g,model,parent_id,child_id)
-    @assert has_vertex(g,parent_id)
-    @assert !has_vertex(g,child_id)
-    geom = overapproximate(get_base_geom(get_node(g,parent_id)),model)
-    add_node!(g,GeomNode(geom),child_id)
-    add_edge!(g,parent_id,child_id)
-    return g
-end
-
-abstract type GeometryKey end
-""" 
-    BaseGeomKey <: GeometryKey
-
-Points to any kind of geometry.
-"""
-struct BaseGeomKey <: GeometryKey end
-"""
-    PolyhedronKey <: GeometryKey
-
-Points to a polyhedron.
-"""
-struct PolyhedronKey <: GeometryKey end
-"""
-    ZonotopeKey<: GeometryKey
-
-Points to a zonotope. Might not be useful for approximating shapes that are very
-asymmetrical.
-"""
-struct ZonotopeKey <: GeometryKey end
-struct HyperrectangleKey <: GeometryKey end
-struct HypersphereKey <: GeometryKey end
-struct CylinderKey <: GeometryKey end
-
-export construct_geometry_tree!
-"""
-    TODO: The default behavior should dispatch on the geometry type. We may not
-    care for all successive approximations with e.g., a large assembly.
-"""
-function construct_geometry_tree!(g,geom)
-    add_node!(g,GeomNode(geom),:BaseGeom)
-    add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
-    add_child_approximation!(g,Hyperrectangle,:Polyhedron,:Hyperrectangle)
-    add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
-end
 
 export
     AssemblyID,
@@ -586,8 +440,8 @@ for op in geom_node_accessor_interface
     @eval $op(n::CustomNode) = $op(node_val(n))
 end
 for op in geom_node_mutator_interface
-    @eval $op(n::SceneNode,val) = $op(n.geom,val)
-    @eval $op(n::CustomNode,val) = $op(node_val(n),val)
+    @eval $op(n::SceneNode,args...) = $op(n.geom,args...)
+    @eval $op(n::CustomNode,args...) = $op(node_val(n),args...)
 end
 GraphUtils.set_parent!(a::SceneNode,b::SceneNode) = set_parent!(a.geom,b.geom)
 GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),node_val(b))
@@ -855,5 +709,83 @@ function find_collision(table,env_state,env,i,t=0)
     return false, -1
 end
 
+
+
+export GeometryHierarchy
+"""
+    GeometryHierarchy
+
+A hierarchical representation of geometry
+Fields:
+* graph - encodes the hierarchy of geometries
+* nodes - geometry nodes
+"""
+@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,Symbol}
+    graph               ::DiGraph               = DiGraph()
+    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
+    vtx_map             ::Dict{Symbol,Int}      = Dict{Symbol,Int}()
+    vtx_ids             ::Vector{Symbol}        = Vector{Symbol}() # maps vertex uid to actual graph node
+end
+
+distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(get_node(a,:Hypersphere),get_node(b,:Hypersphere))
+function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=:Hypersphere)
+    v = get_vtx(a,leaf_id)
+    while has_vertex(a,v)
+        k = get_vtx_id(a,v)
+        if has_vertex(b,k)
+            if !has_overlap(get_node(a,k),get_node(b,k))
+                return false
+            end
+        end
+        v = get_parent(a,k)
+    end
+    return true
+end
+
+export add_child_approximation!
+function add_child_approximation!(g,model,parent_id,child_id)
+    @assert has_vertex(g,parent_id)
+    @assert !has_vertex(g,child_id)
+    geom = overapproximate(get_base_geom(get_node(g,parent_id)),model)
+    add_node!(g,GeomNode(geom),child_id)
+    add_edge!(g,parent_id,child_id)
+    return g
+end
+
+abstract type GeometryKey end
+""" 
+    BaseGeomKey <: GeometryKey
+
+Points to any kind of geometry.
+"""
+struct BaseGeomKey <: GeometryKey end
+"""
+    PolyhedronKey <: GeometryKey
+
+Points to a polyhedron.
+"""
+struct PolyhedronKey <: GeometryKey end
+"""
+    ZonotopeKey<: GeometryKey
+
+Points to a zonotope. Might not be useful for approximating shapes that are very
+asymmetrical.
+"""
+struct ZonotopeKey <: GeometryKey end
+struct HyperrectangleKey <: GeometryKey end
+struct HypersphereKey <: GeometryKey end
+struct CylinderKey <: GeometryKey end
+
+export construct_geometry_tree!
+"""
+    TODO: The default behavior should dispatch on the geometry type. We may not
+    care for all successive approximations with e.g., a large assembly.
+"""
+function construct_geometry_tree!(g,geom)
+    add_node!(g,GeomNode(geom),:BaseGeom)
+    add_child_approximation!(g,equatorial_overapprox_model(),:BaseGeom,:Polyhedron)
+    add_child_approximation!(g,Hyperrectangle,:Polyhedron,:Hyperrectangle)
+    add_child_approximation!(g,Ball2,         :Polyhedron,:Hypersphere)
+end
 
 end

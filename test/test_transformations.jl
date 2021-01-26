@@ -108,11 +108,39 @@ let
 end
 # Test Transform Tree
 let
-    for root in [TransformNode(), GeomNode(Ball2(zeros(3),1.0))]
-        tree = GraphUtils.CustomNTree{typeof(root),Symbol}()
-        add_node!(tree,root,:ONE)
-        GraphUtils.add_child!(tree,:ONE,deepcopy(root),:TWO)
-        GraphUtils.add_child!(tree,:TWO,deepcopy(root),:THREE)
+    a = TransformNode()
+    b = TransformNode()
+    c = TransformNode()
+    tree = GraphUtils.CustomNTree{typeof(a),Symbol}()
+    add_node!(tree,a,:ONE)
+    add_node!(tree,b,:TWO)
+    add_node!(tree,c,:THREE)
+    set_child!(tree,:ONE,:TWO)
+    set_child!(tree,:TWO,:THREE)
+    t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
+    set_local_transform!(tree,1,t)
+    @test !GraphUtils.cached_node_up_to_date(a)
+    @test !GraphUtils.cached_node_up_to_date(b)
+    @test !GraphUtils.cached_node_up_to_date(c)
+    set_local_transform!(tree,1,t,true)
+    @test GraphUtils.cached_node_up_to_date(a)
+    @test GraphUtils.cached_node_up_to_date(b)
+    @test GraphUtils.cached_node_up_to_date(c)
+    set_local_transform!(tree,1,t)
+    @test !GraphUtils.cached_node_up_to_date(a)
+end
+let
+    geom = Ball2(zeros(3),1.0)
+    for (a,b,c,d) in [
+            (TransformNode(),TransformNode(),TransformNode(),TransformNode()), 
+            (GeomNode(geom),GeomNode(geom),GeomNode(geom),GeomNode(geom)),
+            ]
+        tree = GraphUtils.CustomNTree{typeof(a),Symbol}()
+        add_node!(tree,a,:ONE)
+        add_node!(tree,b,:TWO)
+        add_node!(tree,c,:THREE)
+        set_child!(tree,:ONE,:TWO)
+        set_child!(tree,:TWO,:THREE)
         t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
         tree2 = deepcopy(tree) # Test deferred computation of transformations
         tree3 = deepcopy(tree) # Test deferred computation of transformations
@@ -131,12 +159,16 @@ let
             @test array_isapprox(global_transform(tree2,v).translation,[v, 0.0, 0.0])
             @test array_isapprox(global_transform(tree3,v).translation,[v, 0.0, 0.0])
         end
-        update_transform_tree!(tree,:ONE)
+        # update_transform_tree!(tree,:ONE)
         for v in LightGraphs.vertices(tree)
             @test array_isapprox(global_transform(tree,v).translation,[v, 0.0, 0.0])
         end
         # Test `change_parent(...)`
-        GraphUtils.add_child!(tree,:THREE,deepcopy(root),:FOUR)
+        add_node!(tree,d,:FOUR)
+        set_child!(tree,:THREE,:FOUR)
+        # set_parent!(d,c)
+        # GraphUtils.add_child!(tree,:THREE,d,:FOUR)
+        # set_parent!(d,c)
         set_local_transform!(tree,:FOUR,t)
         @test array_isapprox(global_transform(tree,:FOUR).translation,[4.0,0,0])
         set_child!(tree,:TWO,:FOUR)
@@ -165,12 +197,13 @@ end
 # Test SceneTree
 let
     tree = SceneTree()
-    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
-    add_node!(tree,RobotNode(RobotID(1),deepcopy(geom)))
-    add_node!(tree,ObjectNode(ObjectID(1),deepcopy(geom)))
-    add_node!(tree,AssemblyNode(AssemblyID(1),deepcopy(geom)))
+    geom = Ball2(zeros(SVector{3,Float64}),1.0)
+    
+    add_node!(tree,RobotNode(RobotID(1),GeomNode(deepcopy(geom))))
+    add_node!(tree,ObjectNode(ObjectID(1),GeomNode(deepcopy(geom))))
+    add_node!(tree,AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom))))
     add_component!(get_node(tree,AssemblyID(1)), ObjectID(1)=>identity_linear_map())
-    n = add_node!(tree,TransportUnitNode(1,deepcopy(geom),AssemblyID(1)))
+    n = add_node!(tree,TransportUnitNode(1,GeomNode(deepcopy(geom)),AssemblyID(1)))
     add_robot!(n,RobotID(1)=>identity_linear_map())
 
     @test_throws AssertionError set_child!(tree,ObjectID(1),RobotID(1))
@@ -229,15 +262,15 @@ let
     # Assembly 1
     #  -- Assembly 2
     #      -- Object 1
-    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
-    a1 = add_node!(tree,AssemblyNode(AssemblyID(1),deepcopy(geom)))
-    a2 = add_node!(tree,AssemblyNode(AssemblyID(2),deepcopy(geom)))
-    o1 = add_node!(tree,ObjectNode(ObjectID(1),deepcopy(geom)))
+    geom = Ball2(zeros(SVector{3,Float64}),1.0)
+    a1 = add_node!(tree,AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom))))
+    a2 = add_node!(tree,AssemblyNode(AssemblyID(2),GeomNode(deepcopy(geom))))
+    o1 = add_node!(tree,ObjectNode(ObjectID(1),GeomNode(deepcopy(geom))))
     add_component!(a1, node_id(a2)=>identity_linear_map())
     add_component!(a2, node_id(o1)=>identity_linear_map())
 
-    r1 = add_node!(tree,RobotNode(RobotID(1),deepcopy(geom)))
-    t1 = add_node!(tree,TransportUnitNode(TransportUnitID(1),deepcopy(geom),
+    r1 = add_node!(tree,RobotNode(RobotID(1),GeomNode(deepcopy(geom))))
+    t1 = add_node!(tree,TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),
         node_id(a2)=>identity_linear_map()))
     add_robot!(t1,node_id(r1)=>identity_linear_map())
 
@@ -270,10 +303,10 @@ let
 end
 # test copy(::SceneNode)
 let
-    geom = GeomNode(Ball2(zeros(SVector{3,Float64}),1.0))
+    geom = Ball2(zeros(SVector{3,Float64}),1.0)
     t = CoordinateTransformations.Translation(1.0,0.0,0.0)
 
-    n = AssemblyNode(AssemblyID(1),deepcopy(geom))
+    n = AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom)))
     add_component!(n, ObjectID(1)=>identity_linear_map())
     n2 = copy(n)
     components(n)[ObjectID(1)] = identity_linear_map() ∘ t
@@ -283,7 +316,7 @@ let
         - HierarchicalGeometry.child_transform(n2,ObjectID(1)).translation),
         0.0)
 
-    n = TransportUnitNode(1,deepcopy(geom),AssemblyID(1))
+    n = TransportUnitNode(1,GeomNode(deepcopy(geom)),AssemblyID(1))
     add_robot!(n,RobotID(1)=>identity_linear_map())
     n2 = copy(n)
     add_robot!(n2,RobotID(1)=>identity_linear_map() ∘ t)
