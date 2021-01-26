@@ -326,3 +326,4 @@ let
         - HierarchicalGeometry.child_transform(n2,RobotID(1)).translation),
         0.0)
 end
+# Test SceneNode with GeometryHierarchy as geom field

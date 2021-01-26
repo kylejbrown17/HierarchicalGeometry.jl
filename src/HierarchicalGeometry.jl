@@ -360,6 +360,108 @@ Base.copy(n::GeomNode) = GeomNode(
 )
 
 
+export GeometryHierarchy
+
+abstract type GeometryKey end
+""" 
+    BaseGeomKey <: GeometryKey
+
+Points to any kind of geometry.
+"""
+struct BaseGeomKey <: GeometryKey end
+"""
+    PolyhedronKey <: GeometryKey
+
+Points to a polyhedron.
+"""
+struct PolyhedronKey <: GeometryKey end
+"""
+    ZonotopeKey<: GeometryKey
+
+Points to a zonotope. Might not be useful for approximating shapes that are very
+asymmetrical.
+"""
+struct ZonotopeKey <: GeometryKey end
+struct HyperrectangleKey <: GeometryKey end
+struct HypersphereKey <: GeometryKey end
+struct CylinderKey <: GeometryKey end
+
+construct_child_approximation(::PolyhedronKey,geom)     = LazySets.overapproximate(geom,equatorial_overapprox_model())
+construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2)
+construct_child_approximation(::HyperrectangleKey,geom) = LazySets.overapproximate(geom,Hyperrectangle)
+
+"""
+    GeometryHierarchy
+
+A hierarchical representation of geometry
+Fields:
+* graph - encodes the hierarchy of geometries
+* nodes - geometry nodes
+"""
+@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,GeometryKey}
+    graph               ::DiGraph               = DiGraph()
+    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
+    vtx_map             ::Dict{GeometryKey,Int} = Dict{GeometryKey,Int}()
+    vtx_ids             ::Vector{GeometryKey}   = Vector{GeometryKey}() # maps vertex uid to actual graph node
+end
+# TODO How to safely copy? All nodes have the same parent.
+function geom_hierarchy(geom::GeomNode)
+    h = GeometryHierarchy()
+    add_node!(h,geom,BaseGeomKey())
+    return h
+end
+
+distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(
+    get_node(a,HypersphereKey()),
+    get_node(b,HypersphereKey())
+    )
+function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=HypersphereKey())
+    v = get_vtx(a,leaf_id)
+    while has_vertex(a,v)
+        k = get_vtx_id(a,v)
+        if has_vertex(b,k)
+            if !has_overlap(get_node(a,k),get_node(b,k))
+                return false
+            end
+        end
+        v = get_parent(a,k)
+    end
+    return true
+end
+
+export add_child_approximation!
+function add_child_approximation!(g::GeometryHierarchy,parent_id,child_id)
+    @assert has_vertex(g,parent_id)
+    @assert !has_vertex(g,child_id)
+    node = get_node(g,parent_id)
+    # geom = overapproximate(get_base_geom(node),model)
+    geom = construct_child_approximation(child_id,get_base_geom(node))
+    add_node!(g,
+        GeomNode(geom,node.parent), # Share parent
+        child_id
+        ) # todo needs parent
+    add_edge!(g,parent_id,child_id)
+    return g
+end
+
+
+export construct_geometry_tree!
+"""
+
+TODO: Ensure that the parent member of the base geometry key is the parent 
+of the SceneNode to which the Geometry Hierarchy is bound.
+"""
+function construct_geometry_tree!(g::GeometryHierarchy,geom::GeomNode)
+    add_node!(g,geom,BaseGeomKey())
+    add_child_approximation!(g,BaseGeomKey(),PolyhedronKey())
+    add_child_approximation!(g,PolyhedronKey(),HyperrectangleKey())
+    add_child_approximation!(g,PolyhedronKey(),HypersphereKey())
+end
+construct_geometry_tree!(g::GeometryHierarchy,geom) = construct_geometry_tree!(g,GeomNode(geom))
+
+get_cached_geom(n::GeometryHierarchy) = get_cached_geom(n,BaseGeomKey())
+
+
 export
     AssemblyID,
     TransportUnitID,
@@ -404,8 +506,8 @@ current parent)
 - Required transform relative to parent (if applicable)
 
 """
-abstract type SceneNode{G} end
-abstract type SceneAssemblyNode{G} <: SceneNode{G} end
+abstract type SceneNode end
+abstract type SceneAssemblyNode <: SceneNode end
 # SceneNode interface
 GraphUtils.node_id(n::SceneNode) = n.id
 
@@ -452,40 +554,46 @@ Shares `n.base_geom`, deepcopies `n.transform_node`, and copies `n.cached_geom`
 """
 Base.copy(n::N) where {N<:SceneNode} = N(n,copy(n.geom))
 
-struct RobotNode{R,G} <: SceneNode{G}
+struct RobotNode{R} <: SceneNode
     id::BotID{R}
-    geom::G
+    geom::GeomNode
+    geom_hierarchy::GeometryHierarchy
 end
+RobotNode(id::BotID,geom) = RobotNode(id,geom,geom_hierarchy(geom))
 RobotNode(n::RobotNode,geom) = RobotNode(n.id,geom)
-struct ObjectNode{G} <: SceneNode{G}
+struct ObjectNode <: SceneNode
     id::ObjectID
-    geom::G
+    geom::GeomNode
+    geom_hierarchy::GeometryHierarchy
 end
+ObjectNode(id::ObjectID,geom) = ObjectNode(id,geom,geom_hierarchy(geom))
 ObjectNode(n::ObjectNode,geom) = ObjectNode(n.id,geom)
 has_component(n::SceneNode,id) = false
-struct AssemblyNode{G} <: SceneNode{G}
+struct AssemblyNode <: SceneNode
     id::AssemblyID
-    geom::G
+    geom::GeomNode
     components::TransformDict{Union{ObjectID,AssemblyID}}
+    geom_hierarchy::GeometryHierarchy
 end
-AssemblyNode(n::AssemblyNode,geom) = AssemblyNode(n.id,geom,n.components)
-AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}())
+AssemblyNode(n::AssemblyNode,geom) = AssemblyNode(n.id,geom,n.components,geom_hierarchy(geom))
+AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}(),geom_hierarchy(geom))
 components(n::AssemblyNode)         = n.components
 add_component!(n::AssemblyNode,p)   = push!(n.components,p)
 has_component(n::AssemblyNode,id)   = haskey(components(n),id)
 child_transform(n::AssemblyNode,id) = components(n)[id]
 
-struct TransportUnitNode{G} <: SceneNode{G}
+struct TransportUnitNode <: SceneNode
     id::TransportUnitID
+    geom::GeomNode
     assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
     robots::TransformDict{BotID} # must be filled with unique invalid ids
-    geom::G
+    geom_hierarchy::GeometryHierarchy
 end
-TransportUnitNode(id::TransportUnitID,a::Pair,args...) = TransportUnitNode(id,
-    convert(Pair{AssemblyID,CoordinateTransformations.Transformation},a),
-    args...)
-TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(n.id,n.assembly,n.robots,geom)
-TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,assembly,TransformDict{BotID}(),geom)
+# TransportUnitNode(id::TransportUnitID,a::Pair,args...) = TransportUnitNode(id,
+#     convert(Pair{AssemblyID,CoordinateTransformations.Transformation},a),
+#     args...)
+TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(n.id,geom,n.assembly,n.robots,geom_hierarchy(geom))
+TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}(),geom_hierarchy(geom))
 TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
 robot_team(n::TransportUnitNode) = n.robots
 assembly_id(n::TransportUnitNode) = n.assembly.first
@@ -499,10 +607,10 @@ add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
 
 # Necessary for copying
-RobotNode{R,G}(n::RobotNode,args...) where {R,G} = RobotNode(n.id,args...)
-for T in (:ObjectNode,:AssemblyNode,:TransportUnitNode)
-    @eval $T{R}(n::$T,args...) where {R} = $T(n,args...)
-end
+RobotNode{R}(n::RobotNode,args...) where {R} = RobotNode(n.id,args...)
+# for T in (:ObjectNode,:AssemblyNode,:TransportUnitNode)
+#     @eval $T{R}(n::$T,args...) where {R} = $T(n,args...)
+# end
 
 """
     abstract type SceneTreeEdge
@@ -716,100 +824,5 @@ function find_collision(table,env_state,env,i,t=0)
     return false, -1
 end
 
-export GeometryHierarchy
-
-abstract type GeometryKey end
-""" 
-    BaseGeomKey <: GeometryKey
-
-Points to any kind of geometry.
-"""
-struct BaseGeomKey <: GeometryKey end
-"""
-    PolyhedronKey <: GeometryKey
-
-Points to a polyhedron.
-"""
-struct PolyhedronKey <: GeometryKey end
-"""
-    ZonotopeKey<: GeometryKey
-
-Points to a zonotope. Might not be useful for approximating shapes that are very
-asymmetrical.
-"""
-struct ZonotopeKey <: GeometryKey end
-struct HyperrectangleKey <: GeometryKey end
-struct HypersphereKey <: GeometryKey end
-struct CylinderKey <: GeometryKey end
-
-construct_child_approximation(::PolyhedronKey,geom)     = LazySets.overapproximate(geom,equatorial_overapprox_model())
-construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2)
-construct_child_approximation(::HyperrectangleKey,geom) = LazySets.overapproximate(geom,Hyperrectangle)
-
-"""
-    GeometryHierarchy
-
-A hierarchical representation of geometry
-Fields:
-* graph - encodes the hierarchy of geometries
-* nodes - geometry nodes
-"""
-@with_kw struct GeometryHierarchy <: AbstractCustomNTree{GeomNode,GeometryKey}
-    graph               ::DiGraph               = DiGraph()
-    nodes               ::Vector{GeomNode}      = Vector{GeomNode}()
-    vtx_map             ::Dict{GeometryKey,Int} = Dict{GeometryKey,Int}()
-    vtx_ids             ::Vector{GeometryKey}   = Vector{GeometryKey}() # maps vertex uid to actual graph node
-end
-# TODO How to safely copy? All nodes have the same parent.
-
-distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(
-    get_node(a,HypersphereKey()),
-    get_node(b,HypersphereKey())
-    )
-function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=HypersphereKey())
-    v = get_vtx(a,leaf_id)
-    while has_vertex(a,v)
-        k = get_vtx_id(a,v)
-        if has_vertex(b,k)
-            if !has_overlap(get_node(a,k),get_node(b,k))
-                return false
-            end
-        end
-        v = get_parent(a,k)
-    end
-    return true
-end
-
-export add_child_approximation!
-function add_child_approximation!(g::GeometryHierarchy,parent_id,child_id)
-    @assert has_vertex(g,parent_id)
-    @assert !has_vertex(g,child_id)
-    node = get_node(g,parent_id)
-    # geom = overapproximate(get_base_geom(node),model)
-    geom = construct_child_approximation(child_id,get_base_geom(node))
-    add_node!(g,
-        GeomNode(geom,node.parent), # Share parent
-        child_id
-        ) # todo needs parent
-    add_edge!(g,parent_id,child_id)
-    return g
-end
-
-
-export construct_geometry_tree!
-"""
-
-TODO: Ensure that the parent member of the base geometry key is the parent 
-of the SceneNode to which the Geometry Hierarchy is bound.
-"""
-function construct_geometry_tree!(g::GeometryHierarchy,geom::GeomNode)
-    add_node!(g,geom,BaseGeomKey())
-    add_child_approximation!(g,BaseGeomKey(),PolyhedronKey())
-    add_child_approximation!(g,PolyhedronKey(),HyperrectangleKey())
-    add_child_approximation!(g,PolyhedronKey(),HypersphereKey())
-end
-construct_geometry_tree!(g::GeometryHierarchy,geom) = construct_geometry_tree!(g,GeomNode(geom))
-
-get_cached_geom(n::GeometryHierarchy) = get_cached_geom(n,BaseGeomKey())
 
 end
