@@ -401,9 +401,9 @@ struct HyperrectangleKey <: GeometryKey end
 struct HypersphereKey <: GeometryKey end
 struct CylinderKey <: GeometryKey end
 
-construct_child_approximation(::PolyhedronKey,geom)     = LazySets.overapproximate(geom,equatorial_overapprox_model())
-construct_child_approximation(::HypersphereKey,geom)    = LazySets.overapproximate(geom,Ball2{Float64,SVector{3,Float64}})
-construct_child_approximation(::HyperrectangleKey,geom) = LazySets.overapproximate(geom,Hyperrectangle)
+construct_child_approximation(::PolyhedronKey,geom,args...)     = LazySets.overapproximate(geom,equatorial_overapprox_model(),args...)
+construct_child_approximation(::HypersphereKey,geom,args...)    = LazySets.overapproximate(geom,Ball2{Float64,SVector{3,Float64}},args...)
+construct_child_approximation(::HyperrectangleKey,geom,args...) = LazySets.overapproximate(geom,Hyperrectangle,args...)
 
 """
     GeometryHierarchy
@@ -446,11 +446,11 @@ function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=Hypersphe
 end
 
 export add_child_approximation!
-function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id=BaseGeomKey())
+function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id,args...)
     @assert has_vertex(g,parent_id)
     @assert !has_vertex(g,child_id)
     node = get_node(g,parent_id)
-    geom = construct_child_approximation(child_id,get_base_geom(node))
+    geom = construct_child_approximation(child_id,get_base_geom(node),args...)
     add_node!(g,
         GeomNode(geom,node.parent), # Share parent
         child_id
@@ -458,6 +458,7 @@ function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id=BaseGe
     add_edge!(g,parent_id,child_id)
     return g
 end
+add_child_approximation!(g,child_id) = add_child_approximation!(g,child_id,BaseGeomKey())
 
 export construct_geometry_tree!
 """
@@ -540,8 +541,8 @@ GraphUtils.rem_parent!(a::CustomNode) = rem_parent!(node_val(a))
 
 get_cached_geom(n::SceneNode,k::GeometryKey) = get_cached_geom(n.geom_hierarchy,k)
 get_base_geom(n::SceneNode,k::GeometryKey) = get_base_geom(n.geom_hierarchy,k)
-function add_child_approximation!(n::SceneNode,child,parent=BaseGeomKey())
-    add_child_approximation!(n.geom_hierarchy,child,parent)
+function add_child_approximation!(n::SceneNode,args...)
+    add_child_approximation!(n.geom_hierarchy,args...)
 end
 
 

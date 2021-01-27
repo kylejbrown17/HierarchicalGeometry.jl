@@ -338,4 +338,18 @@ let
         - HierarchicalGeometry.child_transform(n2,RobotID(1)).translation),
         0.0)
 end
-# Test SceneNode with GeometryHierarchy as geom field
+# Test SceneNode with GeometryHierarchy
+let
+    geom = [
+        GeometryBasics.Line(zero(Point3{Float64}),ones(Point3{Float64})),
+        ]
+    n = ObjectNode(ObjectID(1),GeomNode(geom))
+    ϵ = 2.5
+    add_child_approximation!(n,HierarchicalGeometry.PolyhedronKey(),HierarchicalGeometry.BaseGeomKey(),ϵ)
+    add_child_approximation!(n,HierarchicalGeometry.HypersphereKey(),HierarchicalGeometry.PolyhedronKey())
+    add_child_approximation!(n,HierarchicalGeometry.HyperrectangleKey(),HierarchicalGeometry.PolyhedronKey())
+    for v in LightGraphs.vertices(n.geom_hierarchy)
+        get_cached_geom(n,get_vtx_id(n.geom_hierarchy,v))
+    end
+
+end

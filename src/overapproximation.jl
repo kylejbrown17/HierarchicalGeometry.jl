@@ -1,6 +1,15 @@
 
 abstract type OverapproxModel end
 
+"""
+    LazySets.center(p::AbstractPolytope)
+
+A hacky way of choosing a reasonable center for a polytope.
+"""
+LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
+
+LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = maximum(map(v->ρ(d,v),geom))
+
 export PolyhedronOverapprox
 """
     PolyhedronOverapprox{D,N}
@@ -12,6 +21,7 @@ struct PolyhedronOverapprox{D,N} <: OverapproxModel
     support_vectors::NTuple{N,SVector{D,Float64}}
 end
 get_support_vecs(model::PolyhedronOverapprox) = [v for v in model.support_vectors]
+LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 
 """
     PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
@@ -84,23 +94,12 @@ function equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=coll
     PolyhedronOverapprox(tuple(vecs...))
 end
 
-LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 
-# LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = mapfoldl(v->ρ(d,v),max,geom)
-LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = maximum(map(v->ρ(d,v),geom))
-
-
-function LazySets.overapproximate(lazy_set,model::H,epsilon::Float64=0.1) where {V,T,H<:HPolytope{T,V}}
-    halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)), constraints_list(model))
+function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {V,T,H<:HPolytope{T,V}}
+    halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ), constraints_list(model))
     sort!(halfspaces; by = h->h.b)
-    halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
-    # poly = HPolyhedron{T,V}()
-    # while !isempty(halfspaces) #&& !isbounded(poly)
-    #     poly = intersection(poly,halfspaces[1])
-    #     deleteat!(halfspaces,1)
-    # end
-    # @assert isbounded(poly)
-    # hpoly = convert(H,poly)
+    @show map(h->h.b,halfspaces) 
+    # halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
     hpoly = H()
     for h in halfspaces
         addconstraint!(hpoly,h)
@@ -111,7 +110,7 @@ LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproxi
 
 for TYPE in (:VPolytope,:HPolytope)
     @eval begin
-        function LazySets.overapproximate(p::H,m::Hyperrectangle) where {V,T,H<:$TYPE{T,V}}
+        function LazySets.overapproximate(p::H,m::Hyperrectangle,ϵ::Float64=0.0) where {V,T,H<:$TYPE{T,V}}
             high = -Inf*ones(V)
             low = Inf*ones(V)
             for v in vertices_list(p)
@@ -120,26 +119,21 @@ for TYPE in (:VPolytope,:HPolytope)
             end
             ctr = (high .+ low) / 2
             widths = (high .- low) / 2
-            Hyperrectangle(V(ctr),V(widths))
+            Hyperrectangle(V(ctr),V(widths .+ ϵ / 2))
         end
     end
 end
 
-"""
-    LazySets.center(p::AbstractPolytope)
+function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H,ϵ::Float64=0.0) where {V,T,H<:Ball2{T,V}}
+    r = maximum(map(v->norm(v-get_center(sphere)+ϵ), vertices_list(lazy_set)))
+    Ball2(V(get_center(sphere)),T(r))
+end
+function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
+    overapproximate(s,Ball2(V(LazySets.center(s)),T(1.0)),args...)
+end
 
-A hacky way of choosing a reasonable center for a polytope.
-"""
-LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
-# function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H) where {H<:BallType}
-function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H) where {V,T,H<:Ball2{T,V}}
-    r = maximum(map(v->norm(v-get_center(sphere)), vertices_list(lazy_set)))
-    H(get_center(sphere),r)
-end
-# function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H}) where {H<:BallType}
-function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H}) where {V,T,H<:Ball2{T,V}}
-    overapproximate(s,H(LazySets.center(s),1.0))
-end
+
+
 
 export
     GridDiscretization,
