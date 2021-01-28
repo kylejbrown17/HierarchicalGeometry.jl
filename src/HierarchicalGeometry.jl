@@ -45,11 +45,11 @@ their own origin.
 transform(v,t) = t(v)
 # transform(v::V,t) where {V<:AbstractVector} = V(t(v))
 
-(t::CoordinateTransformations.LinearMap)(::Nothing) = nothing
-(t::CoordinateTransformations.Translation)(::Nothing) = nothing
-(t::CoordinateTransformations.LinearMap)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
+# (t::CoordinateTransformations.LinearMap)(::Nothing) = nothing
+# (t::CoordinateTransformations.Translation)(::Nothing) = nothing
+# (t::CoordinateTransformations.LinearMap)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
 (t::CoordinateTransformations.Translation)(g::BaseGeometry) = LazySets.translate(g,Vector(t.translation))
-(t::CoordinateTransformations.LinearMap)(g::Ball2) = Ball2(t(g.center),g.radius)
+# (t::CoordinateTransformations.LinearMap)(g::Ball2) = Ball2(t(g.center),g.radius)
 """
     (t::CoordinateTransformations.LinearMap)(g::Hyperrectangle)
 
@@ -57,13 +57,30 @@ transform(v,t) = t(v)
 transformed version `g`.
 """
 (t::CoordinateTransformations.LinearMap)(g::Hyperrectangle) = overapproximate(t(convert(LazySets.VPolytope,g)),Hyperrectangle)
-(t::CoordinateTransformations.LinearMap)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
-(t::CoordinateTransformations.LinearMap)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
+(t::CoordinateTransformations.AffineMap)(g::Hyperrectangle) = overapproximate(t(convert(LazySets.VPolytope,g)),Hyperrectangle)
+(t::CoordinateTransformations.Translation)(g::Hyperrectangle) = Hyperrectangle(t(g.center),g.radius)
+# (t::CoordinateTransformations.LinearMap)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
+# (t::CoordinateTransformations.LinearMap)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
 
-"""
-For mapping a transform across a vector of elements.
-"""
-(t::CoordinateTransformations.AffineMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+for T in (
+        :(CoordinateTransformations.AffineMap),
+        :(CoordinateTransformations.LinearMap),
+        :(CoordinateTransformations.Translation),
+    )
+    @eval begin
+        (t::$T)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+        (t::$T)(g::G) where {G<:GeometryBasics.Ngon} = G(map(t,g.points))
+        (t::$T)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
+        (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
+        (t::$T)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
+        (t::$T)(::Nothing) = nothing
+        (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
+    end
+end
+# (t::CoordinateTransformations.AffineMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+# (t::CoordinateTransformations.LinearMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+# (t::CoordinateTransformations.Translation)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
+# (t::CoordinateTransformations.AffineMap)(g::G) where {G<:GeometryBasics.Ngon} = G(map(t,g.points))
 
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))

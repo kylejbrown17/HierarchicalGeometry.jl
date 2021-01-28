@@ -98,7 +98,6 @@ end
 function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {V,T,H<:HPolytope{T,V}}
     halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ), constraints_list(model))
     sort!(halfspaces; by = h->h.b)
-    @show map(h->h.b,halfspaces) 
     # halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
     hpoly = H()
     for h in halfspaces

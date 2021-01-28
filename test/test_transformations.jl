@@ -343,7 +343,7 @@ let
     geom = [
         GeometryBasics.Line(zero(Point3{Float64}),ones(Point3{Float64})),
         ]
-    n = ObjectNode(ObjectID(1),GeomNode(geom))
+    n = HierarchicalGeometry.geom_hierarchy(GeomNode(geom))
     ϵ = 2.5
     add_child_approximation!(n,HierarchicalGeometry.PolyhedronKey(),HierarchicalGeometry.BaseGeomKey(),ϵ)
     add_child_approximation!(n,HierarchicalGeometry.HypersphereKey(),HierarchicalGeometry.PolyhedronKey())
