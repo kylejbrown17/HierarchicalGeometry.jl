@@ -21,7 +21,8 @@ struct PolyhedronOverapprox{D,N} <: OverapproxModel
     support_vectors::NTuple{N,SVector{D,Float64}}
 end
 get_support_vecs(model::PolyhedronOverapprox) = [v for v in model.support_vectors]
-LazySets.HPolytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
+make_polytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
+make_polytope(m::PolyhedronOverapprox{2,N}) where {N} = HPolygon(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 
 """
     PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
@@ -60,7 +61,10 @@ function PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
     PolyhedronOverapprox(tuple(vecs...))
 end
 
-export equatorial_overapprox_model
+export 
+    equatorial_overapprox_model,
+    ngon_overapprox_model
+
 """
     equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=collect(0:π/4:2π),epsilon=0.1)
 
@@ -93,19 +97,33 @@ function equatorial_overapprox_model(lat_angles=[-π/4,0.0,π/4],lon_angles=coll
     end
     PolyhedronOverapprox(tuple(vecs...))
 end
+"""
+    ngon_overapprox_model(lon_angles::Vector{Float64})
 
+2D overapproximation.
+"""
+function ngon_overapprox_model(lon_angles::Vector{Float64})
+    vecs = map(θ->SVector{2,Float64}(cos(θ),sin(θ)),lon_angles)
+    PolyhedronOverapprox(tuple(vecs...))
+end
+ngon_overapprox_model(step::Float64=π/4,start=0.0,stop=2π-step) = ngon_overapprox_model(collect(start:step:stop))
+ngon_overapprox_model(n::Int,start=0.0) = ngon_overapprox_model(2π/n,start)
 
-function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {V,T,H<:HPolytope{T,V}}
-    halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ), constraints_list(model))
-    sort!(halfspaces; by = h->h.b)
-    # halfspaces = sort(LazySets.constraints_list(model); by=h->ρ(h.a, lazy_set))
+function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {H<:AbstractPolytope}#{V,T,H<:HPolytope{T,V}}
+    # halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ), constraints_list(model))
+    # sort!(halfspaces; by = h->h.b)
     hpoly = H()
-    for h in halfspaces
-        addconstraint!(hpoly,h)
+    # for h in halfspaces
+    for h in constraints_list(model)
+        # addconstraint!(hpoly,h)
+        addconstraint!(hpoly,LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ))
     end
     hpoly
 end
-LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproximate(lazy_set,HPolytope(m),args...)
+LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproximate(lazy_set,make_polytope(m),args...)
+
+const Z_PROJECTION_MAT = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
+project_to_2d(geom,t=CoordinateTransformations.LinearMap(Z_PROJECTION_MAT)) = t(geom)
 
 for TYPE in (:VPolytope,:HPolytope)
     @eval begin
@@ -129,6 +147,9 @@ function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H,ϵ::Float
 end
 function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
     overapproximate(s,Ball2(V(LazySets.center(s)),T(1.0)),args...)
+end
+function LazySets.overapproximate(s::Hyperrectangle,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
+    Ball2(V(LazySets.center(s)),T(norm(s.radius)))
 end
 
 

@@ -60,17 +60,43 @@ let
     b = GeomNode(Hyperrectangle([3.0,0.0,0.0],[1.0,1.0,1.0]))
     @test isapprox(HierarchicalGeometry.distance_lower_bound(a,b), 1.0)
 end
-# let
-#     g = GeometryHierarchy()
-#     geom = LazySets.Ball2(zeros(3),1.0)
-#     construct_geometry_tree!(g,geom)
+# Test overapproximation
+let
+    T = SVector{3,Float64}
+    m = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
+    t = CoordinateTransformations.LinearMap(m)
+    model = ngon_overapprox_model(8)
+    for (i,geom) in enumerate([
+        LazySets.Ball2(zeros(T),1.0),
+        Hyperrectangle(zeros(T),ones(T)),
+        VPolytope{Float64,T}([T(0.0,0.0,0.0)]),
+        ones(SVector{3,Float64}),
+        ones(Point{3,Float64})
+    ])
+        g = t(geom)
+        HierarchicalGeometry.project_to_2d(geom)
+        if i < 3
+            overapproximate(t(geom),model)
+            overapproximate(t(geom),Ball2{Float64,SVector{2,Float64}})
+        end
+    end
 
-#     g2 = GeometryHierarchy()
-#     geom2 = LazySets.translate(geom,[3.0,0.0,0.0])
-#     construct_geometry_tree!(g2,geom2)
+    geom = HPolytope{Float64,T}()
+    addconstraint!(geom,LazySets.HalfSpace(T(0.0,1.0,0.0),1.0))
+    addconstraint!(geom,LazySets.HalfSpace(T(1.0,0.0,0.0),1.0))
+    addconstraint!(geom,LazySets.HalfSpace(T(0.0,-1.0,0.0),1.0))
+    addconstraint!(geom,LazySets.HalfSpace(T(-1.0,0.0,0.0),1.0))
+    t(geom)
+    overapproximate(t(geom),model)
+    HierarchicalGeometry.project_to_2d(geom)
+end
+let
+    geom = GeomNode(HierarchicalGeometry.project_to_2d(LazySets.Ball2(zeros(3),1.0)))
+    g = HierarchicalGeometry.geom_hierarchy(geom)
+    add_child_approximation!(g,HierarchicalGeometry.PolygonKey(),HierarchicalGeometry.BaseGeomKey())
+    add_child_approximation!(g,HierarchicalGeometry.CircleKey(),HierarchicalGeometry.PolygonKey())
 
-#     distance_lower_bound(geom,geom2)
-# end
+end
 # let
 #     table = HierarchicalGeometry.CollisionTable{Int}()
 #     geoms = map(i->construct_geometry_tree(GeometryHierarchy(),Ball2(zeros(3),1.0))), 1:3)

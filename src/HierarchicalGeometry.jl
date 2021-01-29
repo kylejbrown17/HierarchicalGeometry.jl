@@ -43,13 +43,8 @@ TODO: It is important for all base geometries to be defined with respect to
 their own origin.
 """
 transform(v,t) = t(v)
-# transform(v::V,t) where {V<:AbstractVector} = V(t(v))
-
-# (t::CoordinateTransformations.LinearMap)(::Nothing) = nothing
-# (t::CoordinateTransformations.Translation)(::Nothing) = nothing
-# (t::CoordinateTransformations.LinearMap)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
 (t::CoordinateTransformations.Translation)(g::BaseGeometry) = LazySets.translate(g,Vector(t.translation))
-# (t::CoordinateTransformations.LinearMap)(g::Ball2) = Ball2(t(g.center),g.radius)
+
 """
     (t::CoordinateTransformations.LinearMap)(g::Hyperrectangle)
 
@@ -59,8 +54,6 @@ transformed version `g`.
 (t::CoordinateTransformations.LinearMap)(g::Hyperrectangle) = overapproximate(t(convert(LazySets.VPolytope,g)),Hyperrectangle)
 (t::CoordinateTransformations.AffineMap)(g::Hyperrectangle) = overapproximate(t(convert(LazySets.VPolytope,g)),Hyperrectangle)
 (t::CoordinateTransformations.Translation)(g::Hyperrectangle) = Hyperrectangle(t(g.center),g.radius)
-# (t::CoordinateTransformations.LinearMap)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
-# (t::CoordinateTransformations.LinearMap)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
 
 for T in (
         :(CoordinateTransformations.AffineMap),
@@ -72,32 +65,24 @@ for T in (
         (t::$T)(g::G) where {G<:GeometryBasics.Ngon} = G(map(t,g.points))
         (t::$T)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
+        (t::$T)(g::VPolygon) = VPolytope(map(t, vertices_list(g)))
+        (t::$T)(g::HPolygon) = HPolytope(map(t, constraints_list(g)))
         (t::$T)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
         (t::$T)(::Nothing) = nothing
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
     end
 end
-# (t::CoordinateTransformations.AffineMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
-# (t::CoordinateTransformations.LinearMap)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
-# (t::CoordinateTransformations.Translation)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
-# (t::CoordinateTransformations.AffineMap)(g::G) where {G<:GeometryBasics.Ngon} = G(map(t,g.points))
+for N in (:(Point{2,Float64}),:(SVector{2,Float64}),)
+    for M in (:(SMatrix{3,3,Float64}),:(Rotation{3,Float64}),)
+        @eval (t::CoordinateTransformations.LinearMap{$M})(p::$N) = $N(t.linear[1:2,1:2]*p)
+    end
+    @eval (t::CoordinateTransformations.Translation)(p::$N) = $N(t.translation[1:2]*p)
+end
 
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map() = identity_linear_map3()
 Base.convert(::Type{Hyperrectangle{Float64,T,T}},rect::Hyperrectangle) where {T} = Hyperrectangle(T(rect.center),T(rect.radius))
-# function transform!(v::V,t) where {V<:AbstractVector}
-#     v .= transform(v,t)
-# end
-# function transform!(h::LazySets.HalfSpace,t)
-#     h.a .= transform(h,t).a
-#     return h
-# end
-# transform!(g::BaseGeometry,t::CoordinateTransformations.Translation) = LazySets.translate!(g,t.translation)
-# function transform!(g::Ball2,t::CoordinateTransformations.LinearMap)
-#     transform!(g.center,t)
-#     return g
-# end
 
 """
     relative_transform(a::AffineMap,b::AffineMap)
@@ -407,6 +392,7 @@ struct BaseGeomKey <: GeometryKey end
 Points to a polyhedron.
 """
 struct PolyhedronKey <: GeometryKey end
+struct PolygonKey <: GeometryKey end
 """
     ZonotopeKey<: GeometryKey
 
@@ -417,10 +403,13 @@ struct ZonotopeKey <: GeometryKey end
 struct HyperrectangleKey <: GeometryKey end
 struct HypersphereKey <: GeometryKey end
 struct CylinderKey <: GeometryKey end
+struct CircleKey <: GeometryKey end
 
 construct_child_approximation(::PolyhedronKey,geom,args...)     = LazySets.overapproximate(geom,equatorial_overapprox_model(),args...)
 construct_child_approximation(::HypersphereKey,geom,args...)    = LazySets.overapproximate(geom,Ball2{Float64,SVector{3,Float64}},args...)
 construct_child_approximation(::HyperrectangleKey,geom,args...) = LazySets.overapproximate(geom,Hyperrectangle,args...)
+construct_child_approximation(::PolygonKey,geom,args...)        = LazySets.overapproximate(geom,ngon_overapprox_model(8),args...)
+construct_child_approximation(::CircleKey,geom,args...)         = LazySets.overapproximate(geom,Ball2{Float64,SVector{2,Float64}},args...)
 
 """
     GeometryHierarchy
