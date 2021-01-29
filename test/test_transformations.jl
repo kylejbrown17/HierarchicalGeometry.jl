@@ -12,14 +12,14 @@ let
 
     # Translation
     t = CoordinateTransformations.Translation(1.0,2.0,3.0)
-    @test array_isapprox(ball.center.+t.translation.data,transform(ball,t).center)
-    @test isapprox(ball.radius,transform(ball,t).radius)
-    @test array_isapprox(bbox.center.+t.translation.data,transform(bbox,t).center)
+    @test array_isapprox(ball.center.+t.translation.data,t(ball).center)
+    @test isapprox(ball.radius,t(ball).radius)
+    @test array_isapprox(bbox.center.+t.translation.data,t(bbox).center)
     @test isapprox(bbox.radius,transform(bbox,t).radius)
-    for (v1,v2) in zip(vertices_list(vpoly),vertices_list(transform(vpoly,t)))
+    for (v1,v2) in zip(vertices_list(vpoly),vertices_list(t(vpoly)))
         @test array_isapprox(v1+t.translation,v2)
     end
-    for (v1,v2) in zip(vertices_list(vpoly),vertices_list(tovrep(transform(hpoly,t))))
+    for (v1,v2) in zip(vertices_list(vpoly),vertices_list(tovrep(t(hpoly))))
         @test array_isapprox(v1+t.translation,v2)
     end
 
@@ -343,13 +343,13 @@ let
     geom = [
         GeometryBasics.Line(zero(Point3{Float64}),ones(Point3{Float64})),
         ]
-    n = HierarchicalGeometry.geom_hierarchy(GeomNode(geom))
+    n = HG.geom_hierarchy(GeomNode(geom))
     ϵ = 2.5
     add_child_approximation!(n,HierarchicalGeometry.PolyhedronKey(),HierarchicalGeometry.BaseGeomKey(),ϵ)
     add_child_approximation!(n,HierarchicalGeometry.HypersphereKey(),HierarchicalGeometry.PolyhedronKey())
     add_child_approximation!(n,HierarchicalGeometry.HyperrectangleKey(),HierarchicalGeometry.PolyhedronKey())
-    for v in LightGraphs.vertices(n.geom_hierarchy)
-        get_cached_geom(n,get_vtx_id(n.geom_hierarchy,v))
+    for v in LightGraphs.vertices(n)
+        get_cached_geom(n,get_vtx_id(n,v))
     end
 
 end

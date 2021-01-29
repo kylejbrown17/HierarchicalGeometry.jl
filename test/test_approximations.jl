@@ -43,7 +43,7 @@ let
     @test is_intersection_empty(hpoly,LazySets.translate(hpoly,[9.0,0.0,0.0]))
     @test !is_intersection_empty(hpoly,LazySets.translate(hpoly,[2.0,0.0,0.0]))
     vpoly = tovrep(hpoly)
-    overapproximate(hpoly,Ball2(LazySets.center(hpoly),1.0))
+    overapproximate(hpoly,Ball2([0.0,0.0,0.0],1.0))
     overapproximate(hpoly,Ball2)
 
     m = GridDiscretization(SVector(zeros(3)...),SVector(ones(3)...))
@@ -97,7 +97,7 @@ let
     add_child_approximation!(g,HierarchicalGeometry.PolygonKey(),HierarchicalGeometry.BaseGeomKey())
     add_child_approximation!(g,HierarchicalGeometry.CircleKey(),HierarchicalGeometry.PolygonKey())
 
-    get_cached_geom(get_node(g,HierarchicalGeometry.PolygonKey()))
+    # get_cached_geom(get_node(g,HierarchicalGeometry.PolygonKey()))
 
 end
 # let

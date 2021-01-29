@@ -77,11 +77,13 @@ for T in (
         (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
         (t::$T)(g::VPolygon) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolygon) = HPolytope(map(t, constraints_list(g)))
-        (t::$T)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
+        # (t::$T)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
         (t::$T)(::Nothing) = nothing
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
     end
 end
+(t::CoordinateTransformations.Translation)(h::LazySets.HalfSpace) = LazySets.HalfSpace(h.a,h.b+dot(t.translation,h.a))
+(t::CoordinateTransformations.LinearMap)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
 # for N in (:(Point{2,Float64}),:(SVector{2,Float64}),)
 #     for M in (:(SMatrix{3,3,Float64}),:(Rotation{3,Float64}),)
 #         @eval (t::CoordinateTransformations.LinearMap{$M})(p::$N) = $N(t.linear[1:2,1:2]*p)
@@ -212,7 +214,6 @@ mutable struct TransformNode <: CachedTreeNode{TransformNodeID}
         t.local_transform = a
         t.global_transform = b
         t.parent = t
-        # t.children = Dict{TransformNodeID,TransformNodeID}()
         t.children = Dict{AbstractID,CachedTreeNode}()
         return t
     end
