@@ -345,9 +345,9 @@ let
         ]
     n = HG.geom_hierarchy(GeomNode(geom))
     ϵ = 2.5
-    add_child_approximation!(n,HierarchicalGeometry.PolyhedronKey(),HierarchicalGeometry.BaseGeomKey(),ϵ)
-    add_child_approximation!(n,HierarchicalGeometry.HypersphereKey(),HierarchicalGeometry.PolyhedronKey())
-    add_child_approximation!(n,HierarchicalGeometry.HyperrectangleKey(),HierarchicalGeometry.PolyhedronKey())
+    add_child_approximation!(n,PolyhedronKey(),BaseGeomKey(),ϵ)
+    add_child_approximation!(n,HypersphereKey(),PolyhedronKey())
+    add_child_approximation!(n,HyperrectangleKey(),PolyhedronKey())
     for v in LightGraphs.vertices(n)
         get_cached_geom(n,get_vtx_id(n,v))
     end

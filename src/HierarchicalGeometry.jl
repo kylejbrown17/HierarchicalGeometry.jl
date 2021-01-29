@@ -472,11 +472,14 @@ function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=Hypersphe
 end
 
 export add_child_approximation!
-function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id,args...)
+function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id,
+        base_geom=get_base_geom(g,parent_id),
+        args...
+        )
     @assert has_vertex(g,parent_id)
     @assert !has_vertex(g,child_id)
     node = get_node(g,parent_id)
-    geom = construct_child_approximation(child_id,get_base_geom(node),args...)
+    geom = construct_child_approximation(child_id,base_geom,args...)
     add_node!(g,
         GeomNode(geom,node.parent), # Share parent
         child_id

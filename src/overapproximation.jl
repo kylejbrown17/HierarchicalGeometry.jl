@@ -158,12 +158,14 @@ Returns an iterator over points and radii.
 extract_points_and_radii(n::GeometryBasics.Ngon) = zip(coordinates(n),Base.Iterators.repeated(0.0))
 extract_points_and_radii(n::Ball2) = zip([n.center],n.radius)
 extract_points_and_radii(n::Union{Hyperrectangle,AbstractPolytope}) = zip(LazySets.vertices(n),Base.Iterators.repeated(0.0))
-function extract_points_and_radii(n::AbstractVector{U}) where {U<:Union{LazySet,AbstractGeometry,SVector}} 
+function extract_points_and_radii(n::AbstractVector) # where {U<:Union{LazySet,AbstractGeometry,SVector}} 
     Base.Iterators.flatten(map(extract_points_and_radii,n))
 end
 LazySets.dim(::Type{GeometryBasics.Ngon{N,T,M,P}}) where {N,T,M,P} = N
 LazySets.dim(::GeometryBasics.Ngon{N,T,M,P}) where {N,T,M,P} = N
-LazySets.dim(::AbstractVector{U}) where {U<:AbstractGeometry} = LazySets.dim(U)
+LazySets.dim(::Vector{GeometryBasics.Ngon{N,T,M,P} where {T,M,P}}) where {N} = N
+LazySets.dim(v::AbstractVector) = LazySets.dim(v[1])
+# LazySets.dim(::V) where {U<:AbstractGeometry,V<:AbstractVector{U}} = LazySets.dim(U)
 
 Base.convert(::Type{Ball2{T,V}},b::Ball2) where {T,V} = Ball2(V(b.center),T(b.radius))
 
@@ -176,10 +178,14 @@ for T in (:AbstractPolytope,:LazySet,:AbstractVector)
             @variable(model,d)
             @objective(model,Min,d)
             for (pt,r) in extract_points_and_radii(lazy_set)
-                @constraint(model,d >= r + ϵ + sum(map(i->(v[i]-pt[i])^2,1:N)))
+                # @constraint(model,d >= r + ϵ + sum(map(i->(v[i]-pt[i])^2,1:N)) )
+                # @constraint(model,(d-r-ϵ)^2 >= sum(map(i->(v[i]-pt[i])^2,1:N)) )
+                @constraint(model,[(d-r-ϵ),map(i->(v[i]-pt[i]),1:N)...] in SecondOrderCone())
+
             end
             optimize!(model)
-            return convert(H,Ball2(value.(v),sqrt(value(d))))
+            # return convert(H,Ball2(value.(v),sqrt(value(d))))
+            return convert(H,Ball2(value.(v),value(d)))
         end
     end
 end
