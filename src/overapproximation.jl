@@ -1,12 +1,12 @@
 
 abstract type OverapproxModel end
 
-"""
-    LazySets.center(p::AbstractPolytope)
+# """
+#     LazySets.center(p::AbstractPolytope)
 
-A hacky way of choosing a reasonable center for a polytope.
-"""
-LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
+# A hacky way of choosing a reasonable center for a polytope.
+# """
+# LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
 
 LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = maximum(map(v->ρ(d,v),geom))
 
@@ -141,17 +141,48 @@ for TYPE in (:VPolytope,:HPolytope)
     end
 end
 
-function LazySets.overapproximate(lazy_set::AbstractPolytope,sphere::H,ϵ::Float64=0.0) where {V,T,H<:Ball2{T,V}}
-    r = maximum(map(v->norm(v-get_center(sphere)+ϵ), vertices_list(lazy_set)))
-    Ball2(V(get_center(sphere)),T(r))
+"""
+    extract_points_and_radii(lazy_set)
+
+Returns an iterator over points and radii.
+"""
+extract_points_and_radii(n::GeometryBasics.Ngon) = zip(coordinates(n),Base.Iterators.repeated(0.0))
+extract_points_and_radii(n::Ball2) = zip([n.center],n.radius)
+extract_points_and_radii(n::Union{Hyperrectangle,AbstractPolytope}) = zip(LazySets.vertices(n),Base.Iterators.repeated(0.0))
+function extract_points_and_radii(n::AbstractVector{U}) where {U<:Union{LazySet,AbstractGeometry,SVector}} 
+    Base.Iterators.flatten(map(extract_points_and_radii,n))
 end
-function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
-    overapproximate(s,Ball2(V(LazySets.center(s)),T(1.0)),args...)
-end
-function LazySets.overapproximate(s::Hyperrectangle,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
-    Ball2(V(LazySets.center(s)),T(norm(s.radius)))
+LazySets.dim(::Type{GeometryBasics.Ngon{N,T,M,P}}) where {N,T,M,P} = N
+LazySets.dim(::GeometryBasics.Ngon{N,T,M,P}) where {N,T,M,P} = N
+LazySets.dim(::AbstractVector{U}) where {U<:AbstractGeometry} = LazySets.dim(U)
+
+function LazySets.overapproximate(lazy_set,sphere::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {V,T,H<:Ball2{T,V}}
+    model = Model(default_optimizer())
+    set_optimizer_attributes(model,default_optimizer_attributes()...)
+    @variable(model,v[1:N])
+    @variable(model,d)
+    @objective(model,Min,d)
+    for (pt,r) in extract_points_and_radii(lazy_set)
+        @constraint(model,d >= r + ϵ + sum(map(i->(v[i]-pt[i])^2,1:N)))
+    end
+    optimize!(model)
+    return Ball2(V(value.(v)),T(sqrt(value(d))))
 end
 
+function LazySets.overapproximate(lazy_set,sphere::H,ϵ::Float64=0.0) where {V,T,H<:Ball2{T,V}}
+    r = 0.0
+    for (pt,rad) in extract_points_and_radii(lazy_set)
+        r = max(norm(pt-get_center(sphere))+rad+ϵ, r)
+    end
+    # r = maximum(map(v->norm(v-get_center(sphere)+ϵ), vertices_list(lazy_set)))
+    Ball2(V(get_center(sphere)),T(r))
+end
+# function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
+#     overapproximate(s,Ball2(V(LazySets.center(s)),T(1.0)),args...)
+# end
+# function LazySets.overapproximate(s::Hyperrectangle,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
+#     Ball2(V(LazySets.center(s)),T(norm(s.radius)))
+# end
 
 
 

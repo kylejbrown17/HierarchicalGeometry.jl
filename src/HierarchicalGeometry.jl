@@ -10,11 +10,21 @@ using CoordinateTransformations
 using Rotations
 using LightGraphs, GraphUtils
 using Parameters
+using JuMP
+using ECOS
+using MathOptInterface
 using Logging
 
 # TODO convert RigidBodyDynamics.CartesianFrame3D to CoordinateTransformations.Transformation
 # TODO add RigidBodyDynamics.Mechanism(s) to SceneTree
 # TODO replace TransformNode with RigidBodyDynamics equivalent. Each SceneNode should have a RigidBody included in it.
+
+export HG
+const HG = HierarchicalGeometry
+
+include("JuMP_interface.jl")
+set_default_optimizer!(ECOS.Optimizer)
+set_default_optimizer_attributes!(MOI.Silent()=>true)
 
 export
     transform,
@@ -72,12 +82,12 @@ for T in (
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
     end
 end
-for N in (:(Point{2,Float64}),:(SVector{2,Float64}),)
-    for M in (:(SMatrix{3,3,Float64}),:(Rotation{3,Float64}),)
-        @eval (t::CoordinateTransformations.LinearMap{$M})(p::$N) = $N(t.linear[1:2,1:2]*p)
-    end
-    @eval (t::CoordinateTransformations.Translation)(p::$N) = $N(t.translation[1:2]*p)
-end
+# for N in (:(Point{2,Float64}),:(SVector{2,Float64}),)
+#     for M in (:(SMatrix{3,3,Float64}),:(Rotation{3,Float64}),)
+#         @eval (t::CoordinateTransformations.LinearMap{$M})(p::$N) = $N(t.linear[1:2,1:2]*p)
+#     end
+#     @eval (t::CoordinateTransformations.Translation)(p::$N) = $N(t.translation[1:2]*p)
+# end
 
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
@@ -377,7 +387,16 @@ Base.copy(n::GeomNode) = GeomNode(
 )
 
 
-export GeometryHierarchy
+export 
+    GeometryHierarchy,
+    BaseGeomKey,
+    PolyhedronKey,
+    PolygonKey,
+    ZonotopeKey,
+    HyperrectangleKey,
+    HypersphereKey,
+    CylinderKey,
+    CircleKey
 
 abstract type GeometryKey end
 """ 

@@ -60,12 +60,11 @@ let
     b = GeomNode(Hyperrectangle([3.0,0.0,0.0],[1.0,1.0,1.0]))
     @test isapprox(HierarchicalGeometry.distance_lower_bound(a,b), 1.0)
 end
-# Test overapproximation
+# Test overapproximation in 2D (project from 3D first)
 let
     T = SVector{3,Float64}
     m = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
     t = CoordinateTransformations.LinearMap(m)
-    model = ngon_overapprox_model(8)
     for (i,geom) in enumerate([
         LazySets.Ball2(zeros(T),1.0),
         Hyperrectangle(zeros(T),ones(T)),
@@ -76,8 +75,10 @@ let
         g = t(geom)
         HierarchicalGeometry.project_to_2d(geom)
         if i < 3
-            overapproximate(t(geom),model)
-            overapproximate(t(geom),Ball2{Float64,SVector{2,Float64}})
+            overapproximate(t(geom),ngon_overapprox_model(8))
+            if i > 1
+                overapproximate(t(geom),Ball2{Float64,SVector{2,Float64}})
+            end
         end
     end
 
@@ -87,7 +88,7 @@ let
     addconstraint!(geom,LazySets.HalfSpace(T(0.0,-1.0,0.0),1.0))
     addconstraint!(geom,LazySets.HalfSpace(T(-1.0,0.0,0.0),1.0))
     t(geom)
-    overapproximate(t(geom),model)
+    overapproximate(t(geom),ngon_overapprox_model(8))
     HierarchicalGeometry.project_to_2d(geom)
 end
 let
@@ -95,6 +96,8 @@ let
     g = HierarchicalGeometry.geom_hierarchy(geom)
     add_child_approximation!(g,HierarchicalGeometry.PolygonKey(),HierarchicalGeometry.BaseGeomKey())
     add_child_approximation!(g,HierarchicalGeometry.CircleKey(),HierarchicalGeometry.PolygonKey())
+
+    get_cached_geom(get_node(g,HierarchicalGeometry.PolygonKey()))
 
 end
 # let
