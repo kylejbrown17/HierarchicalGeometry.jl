@@ -14,13 +14,17 @@ using JuMP
 using ECOS
 using MathOptInterface
 using Logging
+using Reexport
+
+@reexport using LazySets
 
 # TODO convert RigidBodyDynamics.CartesianFrame3D to CoordinateTransformations.Transformation
 # TODO add RigidBodyDynamics.Mechanism(s) to SceneTree
 # TODO replace TransformNode with RigidBodyDynamics equivalent. Each SceneNode should have a RigidBody included in it.
 
-export HG
+export HG, CT
 const HG = HierarchicalGeometry
+const CT = CoordinateTransformations
 
 include("JuMP_interface.jl")
 set_default_optimizer!(ECOS.Optimizer)
@@ -30,6 +34,7 @@ export
     transform,
     transform!,
     identity_linear_map,
+    scaled_linear_map,
     distance_lower_bound,
     has_overlap
 
@@ -73,11 +78,11 @@ for T in (
     @eval begin
         (t::$T)(v::V) where {N<:GeometryBasics.Ngon,V<:AbstractVector{N}} = V(map(t,v))
         (t::$T)(g::G) where {G<:GeometryBasics.Ngon} = G(map(t,g.points))
+        (t::$T)(g::C) where {C<:GeometryBasics.Cylinder} = C(t(g.origin),t(g.extremity),g.r)
         (t::$T)(g::VPolytope) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
         (t::$T)(g::VPolygon) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolygon) = HPolytope(map(t, constraints_list(g)))
-        # (t::$T)(h::LazySets.HalfSpace) = LazySets.HalfSpace(t(Vector(h.a)),h.b)
         (t::$T)(::Nothing) = nothing
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
     end
@@ -94,6 +99,7 @@ end
 identity_linear_map3() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map2() = compose(CoordinateTransformations.Translation(zero(SVector{3,Float64})),CoordinateTransformations.LinearMap(one(SMatrix{3,3,Float64})))
 identity_linear_map() = identity_linear_map3()
+scaled_linear_map(scale) = CoordinateTransformations.LinearMap(scale*one(SMatrix{3,3,Float64})) ∘ identity_linear_map()
 Base.convert(::Type{Hyperrectangle{Float64,T,T}},rect::Hyperrectangle) where {T} = Hyperrectangle(T(rect.center),T(rect.radius))
 
 """
@@ -163,7 +169,7 @@ Recursive collision checking
 """
 function check_collision(a,b)
     if has_overlap(a,b)
-        for p in components(b)
+        for p in assembly_components(b)
             if check_collision(p,a)
                 return true
             end
@@ -231,7 +237,8 @@ end
 function Base.copy(n::TransformNode)
     node = TransformNode(
     deepcopy(n.local_transform),
-    deepcopy(n.global_transform))
+    deepcopy(n.global_transform)
+    )
     # Don't want to copy parent or children. Just need to reconnect later.
     return node
 end
@@ -424,10 +431,11 @@ struct HyperrectangleKey <: GeometryKey end
 struct HypersphereKey <: GeometryKey end
 struct CylinderKey <: GeometryKey end
 struct CircleKey <: GeometryKey end
+struct ConvexHullKey <: GeometryKey end
 
 construct_child_approximation(::PolyhedronKey,geom,args...)     = LazySets.overapproximate(geom,equatorial_overapprox_model(),args...)
 construct_child_approximation(::HypersphereKey,geom,args...)    = LazySets.overapproximate(geom,Ball2{Float64,SVector{3,Float64}},args...)
-construct_child_approximation(::HyperrectangleKey,geom,args...) = LazySets.overapproximate(geom,Hyperrectangle,args...)
+construct_child_approximation(::HyperrectangleKey,geom,args...) = LazySets.overapproximate(geom,Hyperrectangle{Float64,SVector{3,Float64},SVector{3,Float64}},args...)
 construct_child_approximation(::PolygonKey,geom,args...)        = LazySets.overapproximate(geom,ngon_overapprox_model(8),args...)
 construct_child_approximation(::CircleKey,geom,args...)         = LazySets.overapproximate(geom,Ball2{Float64,SVector{2,Float64}},args...)
 
@@ -506,18 +514,23 @@ construct_geometry_tree!(g::GeometryHierarchy,geom) = construct_geometry_tree!(g
 
 
 export
+    TransformDict,
     AssemblyID,
     TransportUnitID,
     SceneNode,
     RobotNode,
     ObjectNode,
     AssemblyNode,
-        components,
+        assembly_components,
+        num_components,
+        has_component,
         add_component!,
         child_transform,
     TransportUnitNode,
         robot_team,
         add_robot!,
+        cargo_id,
+        cargo_type,
     SceneTree,
         capture_child!,
         disband!
@@ -529,9 +542,6 @@ const TransformDict{T} = Dict{T,CoordinateTransformations.Transformation}
 An Abstract type, of which all nodes in a SceneTree are concrete subtypes.
 """
 @with_kw struct AssemblyID <: AbstractID
-    id::Int = -1
-end
-@with_kw struct TransportUnitID <: AbstractID
     id::Int = -1
 end
 
@@ -635,31 +645,62 @@ struct AssemblyNode <: SceneNode
 end
 AssemblyNode(n::AssemblyNode,geom) = AssemblyNode(n.id,geom,n.components,geom_hierarchy(geom))
 AssemblyNode(id,geom) = AssemblyNode(id,geom,TransformDict{Union{ObjectID,AssemblyID}}(),geom_hierarchy(geom))
-components(n::AssemblyNode)         = n.components
+assembly_components(n::AssemblyNode)         = n.components
 add_component!(n::AssemblyNode,p)   = push!(n.components,p)
-has_component(n::AssemblyNode,id)   = haskey(components(n),id)
-child_transform(n::AssemblyNode,id) = components(n)[id]
+has_component(n::AssemblyNode,id)   = haskey(assembly_components(n),id)
+child_transform(n::AssemblyNode,id) = assembly_components(n)[id]
+num_components(n) = length(assembly_components(n))
 
-struct TransportUnitNode <: SceneNode
-    id::TransportUnitID
+struct TransportUnitNode{C<:Union{ObjectID,AssemblyID},T} <: SceneNode
     geom::GeomNode
-    assembly::Pair{AssemblyID,CoordinateTransformations.Transformation}
+    cargo::Pair{C,T}
     robots::TransformDict{BotID} # must be filled with unique invalid ids
     geom_hierarchy::GeometryHierarchy
 end
-TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(n.id,geom,n.assembly,n.robots,geom_hierarchy(geom))
-TransportUnitNode(id,geom,assembly) = TransportUnitNode(id,geom,assembly,TransformDict{BotID}(),geom_hierarchy(geom))
-TransportUnitNode(id,geom,assembly_id::AssemblyID) = TransportUnitNode(id,geom,assembly_id=>identity_linear_map())
+TransportUnitNode(n::TransportUnitNode,geom) = TransportUnitNode(geom,n.cargo,n.robots,geom_hierarchy(geom))
+TransportUnitNode(geom,cargo) = TransportUnitNode(geom,cargo,TransformDict{BotID}(),geom_hierarchy(geom))
+TransportUnitNode(geom,cargo_id::Union{AssemblyID,ObjectID}) = TransportUnitNode(geom,cargo_id=>identity_linear_map())
+TransportUnitNode(cargo::Pair) = TransportUnitNode(GeomNode(nothing),cargo)
+TransportUnitNode(cargo_id::Union{AssemblyID,ObjectID}) = TransportUnitNode(cargo_id=>identity_linear_map())
+TransportUnitNode(cargo::Union{AssemblyNode,ObjectNode}) = TransportUnitNode(node_id(cargo))
 robot_team(n::TransportUnitNode) = n.robots
-assembly_id(n::TransportUnitNode) = n.assembly.first
+cargo_id(n::TransportUnitNode) = n.cargo.first
+cargo_type(n::TransportUnitNode) = isa(cargo_id(n),AssemblyID) ? AssemblyNode : ObjectNode
+Base.copy(n::TransportUnitNode) = TransportUnitNode(n,copy(n.geom))
+
+const TransportUnitID = TemplatedID{T} where {T<:TransportUnitNode}
+GraphUtils.node_id(n::TransportUnitNode{C,T}) where {C,T} = TemplatedID{Tuple{TransportUnitNode,C}}(get_id(cargo_id(n)))
 Base.convert(::Pair{A,B},pair) where {A,B} = convert(A,pair.first)=>convert(B,p.second) 
 
-has_component(n::TransportUnitNode,id::AssemblyID)  = id == assembly_id(n)
+has_component(n::TransportUnitNode,id::Union{ObjectID,AssemblyID})  = id == cargo_id(n)
 has_component(n::TransportUnitNode,id::BotID)       = haskey(robot_team(n),id)
-child_transform(n::TransportUnitNode,id::AssemblyID) = n.assembly.second
+child_transform(n::TransportUnitNode,id::Union{ObjectID,AssemblyID}) = has_component(n,id) ? n.cargo.second : throw(ErrorException("TransportUnitNode $n does not have component $id"))
 child_transform(n::TransportUnitNode,id::BotID)     = robot_team(n)[id]
 add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
+add_robot!(n::TransportUnitNode,t::CT.AffineMap)    = add_robot!(n,get_unique_invalid_id(RobotID)=>t)
+
+export collect_child_geometry
+
+
+collect_child_geometry(node::SceneNode,key,args...) = get_base_geom(node,key)
+function collect_child_geometry(dict::TransformDict,key,tree) 
+    [map(tform,
+        collect_child_geometry(get_node(tree, child_id), key, tree)
+        ) for (child_id,tform) in dict]
+end
+function collect_child_geometry(pair::Pair,key,tree)
+    tform = pair.second
+    id = pair.first
+    [ tform(collect_child_geometry(get_node(tree, id), key)) ]
+end
+function collect_child_geometry(node::AssemblyNode,key,tree)
+    collect_child_geometry(assembly_components(node),key,tree)
+end
+function collect_child_geometry(node::TransportUnitNode,key,tree)
+    vcat(collect_child_geometry(robot_team(node),key,tree),
+        collect_child_geometry(node.cargo,key,tree))
+end
 
 
 """
@@ -714,8 +755,8 @@ Permanent edges (cannot be broken after placement)
     inedges             ::Vector{Dict{Int,SceneTreeEdge}}   = Vector{Dict{Int,SceneTreeEdge}}()
     outedges            ::Vector{Dict{Int,SceneTreeEdge}}   = Vector{Dict{Int,SceneTreeEdge}}()
 end
-GraphUtils.add_node!(tree::SceneTree,node::SceneNode) = add_node!(tree,node,node.id)
-GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,n.id)
+GraphUtils.add_node!(tree::SceneTree,node::SceneNode) = add_node!(tree,node,node_id(node))
+GraphUtils.get_vtx(tree::SceneTree,n::SceneNode) = get_vtx(tree,node_id(n))
 function Base.copy(tree::SceneTree)
     SceneTree(
         graph = deepcopy(tree.graph),
@@ -767,7 +808,7 @@ function disband!(tree::SceneTree,n::TransportUnitNode)
         end
         rem_edge!(tree,n,r)
     end
-    rem_edge!(tree,n,assembly_id(n))
+    rem_edge!(tree,n,cargo_id(n))
     return true
 end
 
@@ -790,13 +831,67 @@ function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
             p = get_node(tree,get_parent(tree,v)) # current parent
             @assert(isa(p, TransportUnitNode),
                 "Trying to capture child $v from non-TransportUnit parent $p")
-            # NOTE that there may be a time gap if the assembly has to be lifted
+            # NOTE that there may be a time gap if the cargo has to be lifted
             # into place by a separate "robot"
             disband!(tree,p)
         end
         return set_child!(tree,u,v)
     end
     return false
+end
+
+"""
+    compute_approximate_geometries!(scene_tree,key=HypersphereKey(),base_key=key; ϵ=0.0)
+
+Walk up the tree, computing bounding spheres (or whatever other geometry).
+Args:
+- key: determines the type of overapproximation geometry to compute
+- base_key: determines the type of child geometry on which to base a parent's 
+    geometry
+Example:
+    compute_approximate_geometries!(tree,HyperrectangleKey(),BaseGeomKey()) will
+    compute a Hyperrectangle approximation of each object and assembly. The 
+    computation for each assembly's Hyperrectangle will be based on the 
+    BaseGeomKey geometry of all of that assembly's children.
+"""
+function compute_approximate_geometries!(scene_tree,key=HypersphereKey(),base_key=key;
+    ϵ=0.0,
+    )
+    for v in reverse(topological_sort_by_dfs(scene_tree))
+        node = get_node(scene_tree,v)
+        if !has_vertex(node.geom_hierarchy,key)
+            if isa(node,ObjectNode)
+                add_child_approximation!(node.geom_hierarchy,key,BaseGeomKey())
+            elseif isa(node,AssemblyNode)
+                add_child_approximation!(
+                    node.geom_hierarchy,
+                    key,
+                    BaseGeomKey(),
+                    [t(get_base_geom(get_node(scene_tree,id),base_key)) for (id,t) in assembly_components(node)]
+                    )
+            end
+        end
+    end
+    scene_tree
+end
+
+"""
+    jump_to_final_configuration!(scene_tree;respect_edges=false)
+
+Jump to the final configuration state wherein all `ObjectNode`s and 
+`AssemblyNode`s are in the configurations specified by their parent assemblies.
+"""
+function jump_to_final_configuration!(scene_tree;respect_edges=false)
+    for node in get_nodes(scene_tree)
+        if matches_template(AssemblyNode,node)
+            for (id,tform) in assembly_components(node)
+                if !respect_edges || has_edge(scene_tree,node,id)
+                    set_local_transform!(get_node(scene_tree,id),tform)
+                end
+            end 
+        end
+    end
+    scene_tree
 end
 
 

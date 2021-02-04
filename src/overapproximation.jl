@@ -124,6 +124,7 @@ LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproxi
 
 const Z_PROJECTION_MAT = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
 project_to_2d(geom,t=CoordinateTransformations.LinearMap(Z_PROJECTION_MAT)) = t(geom)
+project_to_3d(geom,t=CoordinateTransformations.LinearMap(transpose(Z_PROJECTION_MAT))) = t(geom)
 
 # Base.convert(::Type{Hyperrectangle{T,V,V}},r::Hyperrectangle) where {T,V,V} = Hyperrectangle(V(r.center),V(r.radius))
 
@@ -131,23 +132,20 @@ for TYPE in (:VPolytope,:HPolytope)
     @eval convert_vec_type(::$TYPE,h::Hyperrectangle) where {V,T,H<:$TYPE{T,V}} = Hyperrectangle(V(h.center),V(h.radius))
 end
 
-# for TYPE in (:VPolytope,:HPolytope)
-#     @eval begin
-        # function LazySets.overapproximate(p::H,::Hyperrectangle,ϵ::Float64=0.0) where {H<:AbstractPolytope}#{V,T,H<:$TYPE{T,V}}
-        function LazySets.overapproximate(p::H,::Hyperrectangle,ϵ::Float64=0.0) where {H<:AbstractPolytope}#{V,T,H<:$TYPE{T,V}}
-            high = -Inf*ones(V)
-            low = Inf*ones(V)
-            for v in vertices_list(p)
-                high = max.(high,v)
-                low = min.(low,v)
-            end
-            ctr = (high .+ low) / 2
-            widths = (high .- low) / 2
-            # Hyperrectangle(V(ctr),V(widths .+ ϵ / 2))
-            # convert(H, Hyperrectangle(ctr,widths .+ ϵ / 2))
-            convert_vec_type(H, Hyperrectangle(ctr,widths .+ ϵ / 2))
-        end
+# function LazySets.overapproximate(pts::AbstractVector,::Type{Hyperrectangle},ϵ::Float64=0.0) 
+#     V = eltype(pts)
+#     high = -Inf*ones(V)
+#     low = Inf*ones(V)
+#     for v in pts
+#         high = max.(high,v)
+#         low = min.(low,v)
 #     end
+#     ctr = (high .+ low) / 2
+#     widths = (high .- low) / 2
+#     Hyperrectangle(ctr,widths .+ (ϵ / 2))
+# end
+# function LazySets.overapproximate(p::H,model::Type{Hyperrectangle},ϵ::Float64=0.0) where {H<:AbstractPolytope}#{V,T,H<:$TYPE{T,V}}
+#     overapproximate(vertices_list(p),model)
 # end
 
 """
@@ -156,11 +154,13 @@ end
 Returns an iterator over points and radii.
 """
 extract_points_and_radii(n::GeometryBasics.Ngon) = zip(coordinates(n),Base.Iterators.repeated(0.0))
-extract_points_and_radii(n::Ball2) = zip([n.center],n.radius)
+extract_points_and_radii(n::Ball2) = [(n.center,n.radius)]
 extract_points_and_radii(n::Union{Hyperrectangle,AbstractPolytope}) = zip(LazySets.vertices(n),Base.Iterators.repeated(0.0))
 function extract_points_and_radii(n::AbstractVector) # where {U<:Union{LazySet,AbstractGeometry,SVector}} 
     Base.Iterators.flatten(map(extract_points_and_radii,n))
 end
+extract_points_and_radii(n::SVector) = [(n,0.0)]
+extract_points_and_radii(n::Point) = [(n,0.0)]
 LazySets.dim(::Type{GeometryBasics.Ngon{N,T,M,P}}) where {N,T,M,P} = N
 LazySets.dim(::GeometryBasics.Ngon{N,T,M,P}) where {N,T,M,P} = N
 LazySets.dim(::Vector{GeometryBasics.Ngon{N,T,M,P} where {T,M,P}}) where {N} = N
@@ -169,7 +169,7 @@ LazySets.dim(v::AbstractVector) = LazySets.dim(v[1])
 
 Base.convert(::Type{Ball2{T,V}},b::Ball2) where {T,V} = Ball2(V(b.center),T(b.radius))
 
-for T in (:AbstractPolytope,:LazySet,:AbstractVector)
+for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon))
     @eval begin
         function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {H<:Ball2}
             model = Model(default_optimizer())
@@ -178,16 +178,28 @@ for T in (:AbstractPolytope,:LazySet,:AbstractVector)
             @variable(model,d)
             @objective(model,Min,d)
             for (pt,r) in extract_points_and_radii(lazy_set)
-                # @constraint(model,d >= r + ϵ + sum(map(i->(v[i]-pt[i])^2,1:N)) )
-                # @constraint(model,(d-r-ϵ)^2 >= sum(map(i->(v[i]-pt[i])^2,1:N)) )
                 @constraint(model,[(d-r-ϵ),map(i->(v[i]-pt[i]),1:N)...] in SecondOrderCone())
-
             end
             optimize!(model)
-            # return convert(H,Ball2(value.(v),sqrt(value(d))))
             return convert(H,Ball2(value.(v),value(d)))
         end
+        function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0) where {A,V<:AbstractVector,H<:Hyperrectangle{A,V,V}}
+            high = -Inf*ones(V)
+            low = Inf*ones(V)
+            for (pt,r) in extract_points_and_radii(lazy_set)
+                high = max.(high,pt .+ r)
+                low = min.(low,pt .- r)
+            end
+            ctr = (high .+ low) / 2
+            widths = (high .- low) / 2
+            Hyperrectangle(ctr,widths .+ (ϵ / 2))
+        end
     end
+end
+function LazySets.overapproximate(lazy_set::Ball2,model::Type{H},ϵ::Float64=0.0) where {A,V<:AbstractVector,H<:Hyperrectangle{A,V,V}}
+    ctr = lazy_set.center
+    r = lazy_set.radius + ϵ
+    Hyperrectangle(V(ctr),r*ones(V))
 end
 
 function LazySets.overapproximate(lazy_set,sphere::H,ϵ::Float64=0.0) where {V,T,H<:Ball2{T,V}}
@@ -197,12 +209,6 @@ function LazySets.overapproximate(lazy_set,sphere::H,ϵ::Float64=0.0) where {V,T
     end
     Ball2(V(get_center(sphere)),T(r))
 end
-# function LazySets.overapproximate(s::AbstractPolytope,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
-#     overapproximate(s,Ball2(V(LazySets.center(s)),T(1.0)),args...)
-# end
-# function LazySets.overapproximate(s::Hyperrectangle,sphere::Type{H},args...) where {V,T,H<:Ball2{T,V}}
-#     Ball2(V(LazySets.center(s)),T(norm(s.radius)))
-# end
 
 
 
@@ -295,6 +301,7 @@ function construct_support_placement_aggregator(pts, n,
         )
     d = (idxs)->d_neighbor(idxs)+d_inner(idxs)
 end
+
 """
     spaced_neighbors(polygon,n::Int,aggregator=sum)
 
@@ -317,13 +324,12 @@ function spaced_neighbors(polygon,n::Int,
         updated = false
         for deltas in Base.Iterators.product(map(i->(-1,0,1),1:n)...)
             idxs = sort(map(i->wrap_idx(length(pts),i),best_idxs .+ deltas))
-            @show idxs
             if length(unique(idxs)) == n
                 if score_function(idxs) > d_hi + ϵ
                     best_idxs = map(i->wrap_idx(length(pts),i),idxs)
                     d_hi = score_function(idxs)
-                    @show best_idxs, d_hi
                     push!(idx_list,best_idxs)
+                    # @info "best_idxs = $best_idxs, d_hi = $d_hi"
                     updated = true
                 end
             end
@@ -345,56 +351,106 @@ function proj_to_line_between_points(p,p1,p2)
     vec = normalize(p2-p1)
     p1 .+ proj_to_line(v,vec)
 end
-perimeter(pts) = sum(map(i->norm(wrap_get(pts,(i,i+1))),1:length(pts)))
+perimeter(pts) = sum(map(v->norm(v[1]-v[2]),zip(pts[1:end-1],pts[2:end]))) #sum(map(i->norm(wrap_get(pts,(i,i+1))),1:length(pts)))
 perimeter(p::LazySets.AbstractPolygon) = perimeter(vertices_list(p))
 get_pts(p::LazySets.AbstractPolytope) = vertices_list(p)
 get_pts(v::AbstractVector) = v
-"""
-    select_support_locations(geom,transport_model)
 
-Given some arbitrary 3D geometry, select a set of locations to support it from
-beneath. Requires specification of an aggregator function.
 """
-function select_support_locations(geom,transport_model,
+    select_support_locations(polygon,r)
+
+Select support locations where options are the vertices of `polygon` and the 
+robot radius is `r`.
+"""
+function select_support_locations(polygon::LazySets.AbstractPolygon,r;
         score_function_constructor=construct_support_placement_aggregator,
     )
-    r       = transport_model.robot_radius
-    a_r_max     = transport_model.max_area_per_robot
-    v_r_max = transport_model.max_volume_per_robot
-
-    zvec = SVector{3,Float64}(0,0,1)
-    proj_mat = one(SMatrix{3,3,Float64})[1:2,1:3]
-    # gpts = get_pts(geom)
-    polygon = VPolygon(convex_hull(map(v->proj_mat*v,geom)))
-    # compute geom height, projection area, and bounding volume
-    H = maximum(map(v->sum(dot(v,zvec)),geom)) # height
-    A = LazySets.area(polygon) # area
-    P = perimeter(polygon)
-    V = H*A # volume
-    # compute rquired number of robots
-    n = Int(ceil(max(A / a_r_max, V / v_r_max)))
-    n = min(n,Int(ceil(P/(2*r))))
+    n = select_num_robots(polygon,r)
     if n == 1
-        support_pts = [LazySets.center(polygon)]
+        sphere = overapproximate(polygon,Ball2{Float64,SVector{2,Float64}})
+        support_pts = [LazySets.center(sphere)]
     else
         pts = vertices_list(polygon)
         score_function=score_function_constructor(pts,n)
         best_idxs, _ = spaced_neighbors(polygon,n,score_function)
-        @show best_idxs
+        if length(best_idxs) < n
+            @warn "$n support points requested, but only $(length(best_idxs)) returned"
+        end
         support_pts = pts[best_idxs]
     end
-    # length
-    # L, (i,j) = extremal_points(pts)
-    # width
-    # p1 = pts[i]
-    # p2 = pts[j]
-    # vecs = map(p->p.-p1,pts)
-    # vec = normalize(p2-p1)
-    # dists = map(v->norm(v-proj_to_line(v,vec)),vecs)
-    # k = argmax(dists)
     support_pts
-
 end
-select_support_locations(p::AbstractPolytope,args...) = select_support_locations(vertices_list(p),args...)
+
+"""
+    select_num_robots(polygon,r)
+
+polygon: the polygon whose vertices are eligible locations for placing robots
+r: the robot radius
+"""
+function select_num_robots(polygon,r)
+    # Extract length and width from spectral value decomposition
+    pts = vertices_list(polygon)
+    _,S,_ = svd(hcat(convert.(Vector, pts)...)) 
+    L = S[1] # length
+    W = S[2] # width
+    # 
+    p = perimeter(polygon)
+    A = LazySets.area(polygon)
+    # V = A*H # volume = area * height
+    # Choose the number of robots
+    n = max(1, min(Int(floor(p/(π*r))), 2))
+    if W >= 2*r
+        # L > W, so p is at least (2+2+2√2)r
+        n = 3 # Can fit at least three robots
+        # Compute upper bound on the number of robots
+        N = length(pts)
+        n_max = min(N, Int(floor(p/(π*r)))) 
+        # for (i,pt1) in enumerate(pts)
+        #     j = i == length(pts) ? 1 : i + 1
+        #     pt2 = pts[j]
+        #     if norm(pt1-pt2) <= 2*r
+        #         n_max = n_max - 1
+        #     end
+        # end
+        # @assert n_max >= 1 "N=$N, L=$L, W=$W, p=$p, n=$n, pts=$pts"
+        n = min(n_max, 4) # try jumping up to 4
+        # Now impose a lower bound based on sqrt(perimeter), so n will increase 
+        # more slowly as p grows.
+        n = min(n_max, Int(floor( 2*sqrt(p/(π*r)) )))
+    end
+    @info "" n
+    return n
+end
+# select_support_locations(p::AbstractPolytope,args...) = select_support_locations(vertices_list(p),args...)
 
 # spread out sub assemblies
+
+"""
+    compute_hierarchical_2d_convex_hulls(scene_tree)
+
+Compute the 2d projected convex hull of each `ObjectNode` and each 
+`AssemblyNode` in scene_tree.
+"""
+function compute_hierarchical_2d_convex_hulls(scene_tree)
+    cvx_hulls = Dict{AbstractID,Vector{Point{2,Float64}}}()
+    for v in reverse(topological_sort_by_dfs(scene_tree))
+        node = get_node(scene_tree,v)
+        if matches_template(ObjectNode,node)
+            pts = map(HG.project_to_2d, coordinates(get_base_geom(node)))
+            cvx_hulls[node_id(node)] = convex_hull(pts)
+        elseif matches_template(AssemblyNode,node)
+            pts = nothing
+            for (child_id,tform) in assembly_components(node)
+                composite_tform = HG.project_to_2d ∘ tform ∘ HG.project_to_3d
+                child_pts = map(composite_tform, cvx_hulls[child_id])
+                if pts === nothing
+                    pts = child_pts
+                else
+                    append!(pts,child_pts)
+                end
+            end
+            cvx_hulls[node_id(node)] = convex_hull(pts)
+        end
+    end
+    cvx_hulls
+end

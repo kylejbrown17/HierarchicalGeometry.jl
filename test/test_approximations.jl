@@ -91,6 +91,24 @@ let
     overapproximate(t(geom),ngon_overapprox_model(8))
     HierarchicalGeometry.project_to_2d(geom)
 end
+# Hyperrectangle
+let
+    T = SVector{3,Float64}
+    for geom in [
+        [T(0.0,0.0,0.0),T(1.0,1.0,1.0)],
+        Ball2(zeros(3),1.0),
+        [Ball2(zeros(3),1.0)],
+        GeometryBasics.Line(Point3(0.0,0.0,0.0),Point3(1.0,1.0,1.0)),
+        [GeometryBasics.Line(Point3(0.0,0.0,0.0),Point3(1.0,1.0,1.0)),]
+    ]
+        h = overapproximate(geom,Hyperrectangle{Float64,T,T})
+    end
+    pts = [T(0.0,0.0,0.0),T(1.0,1.0,1.0)]
+    h = overapproximate(pts,Hyperrectangle{Float64,T,T})
+    p = convert(VPolytope,h)
+    overapproximate(p,Hyperrectangle{Float64,T,T})
+
+end
 let
     geom = GeomNode(HierarchicalGeometry.project_to_2d(LazySets.Ball2(zeros(3),1.0)))
     g = HierarchicalGeometry.geom_hierarchy(geom)

@@ -119,7 +119,7 @@ let
     # add_node!(tree,c,:THREE)
     # set_child!(tree,:ONE,:TWO)
     # set_child!(tree,:TWO,:THREE)
-    t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
+    t = CoordinateTransformations.Translation(1.0,0.0,0.0) ∘ CoordinateTransformations.LinearMap(RotZ(0))
     set_local_transform!(tree,1,t)
     @test !GraphUtils.cached_node_up_to_date(a)
     @test !GraphUtils.cached_node_up_to_date(b)
@@ -145,7 +145,7 @@ let
         # add_node!(tree,c,:THREE)
         # set_child!(tree,:ONE,:TWO)
         # set_child!(tree,:TWO,:THREE)
-        t = compose(CoordinateTransformations.Translation(1.0,0.0,0.0),CoordinateTransformations.LinearMap(RotZ(0)))
+        t = CoordinateTransformations.Translation(1.0,0.0,0.0) ∘ CoordinateTransformations.LinearMap(RotZ(0))
         tree2 = deepcopy(tree) # Test deferred computation of transformations
         tree3 = deepcopy(tree) # Test deferred computation of transformations
         for v in LightGraphs.vertices(tree)
@@ -185,7 +185,7 @@ let
     @test array_isapprox(get_base_geom(n).center,geom.center)
     # set_up_to_date!(n,true)
     # @test is_up_to_date(n)
-    t = compose(CoordinateTransformations.Translation(1.0,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
+    t = CoordinateTransformations.Translation(1.0,0,0) ∘ CoordinateTransformations.LinearMap(RotZ(0))
     set_local_transform!(n,t)
     # set_global_transform!(n,t)
     # @test !is_up_to_date(n)
@@ -199,26 +199,26 @@ let
     tree = SceneTree()
     geom = Ball2(zeros(SVector{3,Float64}),1.0)
     
-    add_node!(tree,RobotNode(RobotID(1),GeomNode(deepcopy(geom))))
-    add_node!(tree,ObjectNode(ObjectID(1),GeomNode(deepcopy(geom))))
-    add_node!(tree,AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom))))
-    add_component!(get_node(tree,AssemblyID(1)), ObjectID(1)=>identity_linear_map())
-    n = add_node!(tree,TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),AssemblyID(1)))
-    add_robot!(n,RobotID(1)=>identity_linear_map())
+    r = add_node!(tree,RobotNode(RobotID(1),GeomNode(deepcopy(geom))))
+    o = add_node!(tree,ObjectNode(ObjectID(1),GeomNode(deepcopy(geom))))
+    a = add_node!(tree,AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom))))
+    add_component!(get_node(tree,AssemblyID(1)), node_id(o)=>identity_linear_map())
+    n = add_node!(tree,TransportUnitNode(GeomNode(deepcopy(geom)),AssemblyID(1)))
+    add_robot!(n,node_id(r)=>identity_linear_map())
 
-    @test_throws AssertionError set_child!(tree,ObjectID(1),RobotID(1))
-    @test_throws AssertionError set_child!(tree,RobotID(1),ObjectID(1))
-    @test_throws AssertionError set_child!(tree,TransportUnitID(1),ObjectID(1))
-    @test_throws AssertionError set_child!(tree,AssemblyID(1),RobotID(1))
+    @test_throws AssertionError set_child!(tree,o,r)
+    @test_throws AssertionError set_child!(tree,r,o)
+    @test_throws AssertionError set_child!(tree,n,o)
+    @test_throws AssertionError set_child!(tree,a,r)
 
-    set_child!(tree,AssemblyID(1),ObjectID(1))
-    @test has_edge(tree,AssemblyID(1),ObjectID(1))
-    set_child!(tree,TransportUnitID(1),RobotID(1))
-    @test has_edge(tree,TransportUnitID(1),RobotID(1))
-    set_child!(tree,TransportUnitID(1),AssemblyID(1))
-    @test has_edge(tree,TransportUnitID(1),AssemblyID(1))
-    t = compose(CoordinateTransformations.Translation(1.0,0,0),CoordinateTransformations.LinearMap(RotZ(0)))
-    set_local_transform!(tree,TransportUnitID(1),t)
+    set_child!(tree,a,o)
+    @test has_edge(tree,a,o)
+    set_child!(tree,n,r)
+    @test has_edge(tree,n,r)
+    set_child!(tree,n,a)
+    @test has_edge(tree,n,a)
+    t = CoordinateTransformations.Translation(1.0,0,0) ∘ CoordinateTransformations.LinearMap(RotZ(0))
+    set_local_transform!(tree,n,t)
     for v in LightGraphs.vertices(tree)
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
@@ -227,16 +227,16 @@ let
 
     # Verify that edge removal affects graph edges and "hidden" transform tree 
     # structure.
-    rem_edge!(tree,TransportUnitID(1),AssemblyID(1))
-    n = HierarchicalGeometry.get_transform_node(get_node(tree,AssemblyID(1)))
-    @test get_parent(n) == n
+    rem_edge!(tree,n,a)
+    tn = HierarchicalGeometry.get_transform_node(a)
+    @test get_parent(tn) === tn
     # Test that nodes don't "jump" when the edge is broken
     for v in LightGraphs.vertices(tree)
         @test array_isapprox(global_transform(tree,v).translation,t.translation)
     end
 
     # # test copy behavior of nodes only
-    set_local_transform!(base_tree,TransportUnitID(1),identity_linear_map())
+    set_local_transform!(base_tree,n,identity_linear_map())
     # base_tree = tree
     # t = CoordinateTransformations.Translation(1.0,0.0,0.0)
     # tree = deepcopy(base_tree)
@@ -282,7 +282,7 @@ let
     add_component!(a2, node_id(o1)=>identity_linear_map())
 
     r1 = add_node!(tree,RobotNode(RobotID(1),GeomNode(deepcopy(geom))))
-    t1 = add_node!(tree,TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),
+    t1 = add_node!(tree,TransportUnitNode(GeomNode(deepcopy(geom)),
         node_id(a2)=>identity_linear_map()))
     add_robot!(t1,node_id(r1)=>identity_linear_map())
 
@@ -309,9 +309,9 @@ let
     @test_throws AssertionError rem_edge!(tree,a2,o1) # a2 → o1 should be locked
     
     @test_throws AssertionError set_child!(tree,o1,r1)
-    @test_throws AssertionError set_child!(tree,RobotID(1),ObjectID(1))
-    @test_throws AssertionError set_child!(tree,TransportUnitID(1),ObjectID(1))
-    @test_throws AssertionError set_child!(tree,AssemblyID(1),RobotID(1))
+    @test_throws AssertionError set_child!(tree,r1,o1)
+    @test_throws AssertionError set_child!(tree,t1,o1)
+    @test_throws AssertionError set_child!(tree,a1,r1)
 end
 # test copy(::SceneNode)
 let
@@ -321,14 +321,14 @@ let
     n = AssemblyNode(AssemblyID(1),GeomNode(deepcopy(geom)))
     add_component!(n, ObjectID(1)=>identity_linear_map())
     n2 = copy(n)
-    components(n)[ObjectID(1)] = identity_linear_map() ∘ t
+    assembly_components(n)[ObjectID(1)] = identity_linear_map() ∘ t
     # AssemblyNode compondents should be shared
     @test isapprox(
         norm(HierarchicalGeometry.child_transform(n,ObjectID(1)).translation
         - HierarchicalGeometry.child_transform(n2,ObjectID(1)).translation),
         0.0)
 
-    n = TransportUnitNode(TransportUnitID(1),GeomNode(deepcopy(geom)),AssemblyID(1))
+    n = TransportUnitNode(GeomNode(deepcopy(geom)),AssemblyID(1))
     add_robot!(n,RobotID(1)=>identity_linear_map())
     n2 = copy(n)
     add_robot!(n2,RobotID(1)=>identity_linear_map() ∘ t)
@@ -345,11 +345,11 @@ let
         ]
     n = HG.geom_hierarchy(GeomNode(geom))
     ϵ = 2.5
-    add_child_approximation!(n,PolyhedronKey(),BaseGeomKey(),ϵ)
-    add_child_approximation!(n,HypersphereKey(),PolyhedronKey())
-    add_child_approximation!(n,HyperrectangleKey(),PolyhedronKey())
-    for v in LightGraphs.vertices(n)
-        get_cached_geom(n,get_vtx_id(n,v))
-    end
+    add_child_approximation!(n,PolyhedronKey(),BaseGeomKey())
+    # add_child_approximation!(n,HypersphereKey(),PolyhedronKey())
+    # add_child_approximation!(n,HyperrectangleKey(),PolyhedronKey())
+    # for v in LightGraphs.vertices(n)
+    #     get_cached_geom(n,get_vtx_id(n,v))
+    # end
 
 end
