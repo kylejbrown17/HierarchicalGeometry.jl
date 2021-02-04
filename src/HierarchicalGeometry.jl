@@ -48,6 +48,30 @@ get_center(s::Hyperrectangle) = s.center
 get_radius(s::Hyperrectangle) = s.radius
 GeometryBasics.HyperRectangle(s::Hyperrectangle) = GeometryBasics.HyperRectangle(Vec((s.center .- s.radius)...),2*Vec(s.radius...))
 
+export 
+    default_robot_geom,
+    set_default_robot_geom!
+
+global DEFAULT_ROBOT_GEOM = GeometryBasics.Cylinder(
+    Point{3,Float64}(0.0,0.0,0.0),
+    Point{3,Float64}(0.0,0.0,0.25),
+    0.5
+)
+"""
+    default_robot_geom()
+
+Get the default robot geometry.
+"""
+default_robot_geom() = DEFAULT_ROBOT_GEOM
+"""
+    set_default_robot_geom!(geom)
+
+Set the default robot geometry.
+"""
+function set_default_robot_geom!(geom)
+    global DEFAULT_ROBOT_GEOM = geom
+end
+
 include("overapproximation.jl")
 
 """
@@ -458,8 +482,17 @@ function geom_hierarchy(geom::GeomNode)
     add_node!(h,geom,BaseGeomKey())
     return h
 end
-get_cached_geom(n::GeometryHierarchy,k=BaseGeomKey()) = get_cached_geom(get_node(n,k))
-get_base_geom(n::GeometryHierarchy,k=BaseGeomKey()) = get_base_geom(get_node(n,k))
+for op in (:get_base_geom,:get_cached_geom)
+    @eval begin
+        function $op(n::GeometryHierarchy,k=BaseGeomKey())
+            if has_vertex(n,k)
+                return $op(get_node(n,k))
+            else
+                return nothing
+            end
+        end
+    end
+end
 
 distance_lower_bound(a::GeometryHierarchy,b::GeometryHierarchy) = distance_lower_bound(
     get_node(a,HypersphereKey()),
@@ -480,12 +513,22 @@ function has_overlap(a::GeometryHierarchy,b::GeometryHierarchy,leaf_id=Hypersphe
 end
 
 export add_child_approximation!
-function add_child_approximation!(g::GeometryHierarchy,child_id,parent_id,
+"""
+    add_child_approximation!(g::GeometryHierarchy, child_key, parent_key,
+        base_geom=get_base_geom(g,parent_id), args...)
+
+Overapproximate `g`'s type `parent_key` geometry with geometry of type 
+`child_key`, and add this new approximation to `g` under key `child_key` with an
+edge from `parent_key` to `child_key`. 
+"""
+function add_child_approximation!(g::GeometryHierarchy,
+        child_id,
+        parent_id,
         base_geom=get_base_geom(g,parent_id),
         args...
         )
-    @assert has_vertex(g,parent_id)
-    @assert !has_vertex(g,child_id)
+    @assert has_vertex(g,parent_id) "g does not have parent_id = $parent_id"
+    @assert !has_vertex(g,child_id) "g already has child_id = $child_id"
     node = get_node(g,parent_id)
     geom = construct_child_approximation(child_id,base_geom,args...)
     add_node!(g,
@@ -584,8 +627,6 @@ function add_child_approximation!(n::SceneNode,args...)
     add_child_approximation!(n.geom_hierarchy,args...)
 end
 
-
-
 """
     required_transforms_to_children(n::SceneNode)
 
@@ -594,14 +635,6 @@ Returns a dictionary mapping child id to required relative transform.
 function required_transforms_to_children(n::SceneNode)
     return TransformDict{AbstractID}()
 end
-
-"""
-    required_parent(n::SceneNode)
-
-Returns the id of the required parent node. This is only applicable to 
-`ObjectNode` and `AssemblyNode`.
-"""
-function required_parent end
 
 """
     required_transform_to_parent(n::SceneNode,parent_id)
@@ -650,6 +683,7 @@ add_component!(n::AssemblyNode,p)   = push!(n.components,p)
 has_component(n::AssemblyNode,id)   = haskey(assembly_components(n),id)
 child_transform(n::AssemblyNode,id) = assembly_components(n)[id]
 num_components(n) = length(assembly_components(n))
+required_transforms_to_children(n::AssemblyNode) = assembly_components(n)
 
 struct TransportUnitNode{C<:Union{ObjectID,AssemblyID},T} <: SceneNode
     geom::GeomNode
@@ -667,6 +701,9 @@ robot_team(n::TransportUnitNode) = n.robots
 cargo_id(n::TransportUnitNode) = n.cargo.first
 cargo_type(n::TransportUnitNode) = isa(cargo_id(n),AssemblyID) ? AssemblyNode : ObjectNode
 Base.copy(n::TransportUnitNode) = TransportUnitNode(n,copy(n.geom))
+function required_transforms_to_children(n::TransportUnitNode)
+    merge(robot_team(n),Dict(n.cargo))
+end
 
 const TransportUnitID = TemplatedID{T} where {T<:TransportUnitNode}
 GraphUtils.node_id(n::TransportUnitNode{C,T}) where {C,T} = TemplatedID{Tuple{TransportUnitNode,C}}(get_id(cargo_id(n)))
@@ -680,26 +717,57 @@ add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
 add_robot!(n::TransportUnitNode,t::CT.AffineMap)    = add_robot!(n,get_unique_invalid_id(RobotID)=>t)
 
-export collect_child_geometry
+export recurse_child_geometry
 
+"""
+    recurse_child_geometry(node::SceneNode,tree,key=BaseGeomKey(),depth=typemax(Int))
 
-collect_child_geometry(node::SceneNode,key,args...) = get_base_geom(node,key)
-function collect_child_geometry(dict::TransformDict,key,tree) 
-    [map(tform,
-        collect_child_geometry(get_node(tree, child_id), key, tree)
-        ) for (child_id,tform) in dict]
+Return an iterator over all geometry elements matching `key` that belong to 
+`node` or to any of `node`'s descendants down to depth `depth`.
+"""
+function recurse_child_geometry(node::SceneNode,tree,key=BaseGeomKey(),depth=typemax(Int))
+    if depth < 0
+        return nothing
+    end
+    geom = [get_base_geom(node,key)]
+    if !(geom[1] === nothing)
+        return geom
+    end
+    return nothing
 end
-function collect_child_geometry(pair::Pair,key,tree)
-    tform = pair.second
-    id = pair.first
-    [ tform(collect_child_geometry(get_node(tree, id), key)) ]
+function recurse_child_geometry(dict::TransformDict,tree,key=BaseGeomKey(),depth=typemax(Int)) 
+    if depth < 0
+        return nothing
+    end
+    geoms = []
+    for (child_id,tform) in dict
+        if has_vertex(tree,child_id)
+            child_geom = recurse_child_geometry(get_node(tree, child_id),tree,key,depth)
+            if !(child_geom === nothing)
+                push!(geoms, transform_iter(tform,child_geom))
+            end
+        end
+    end
+    if isempty(geoms)
+        return nothing
+    end
+    Base.Iterators.flatten(geoms)
 end
-function collect_child_geometry(node::AssemblyNode,key,tree)
-    collect_child_geometry(assembly_components(node),key,tree)
-end
-function collect_child_geometry(node::TransportUnitNode,key,tree)
-    vcat(collect_child_geometry(robot_team(node),key,tree),
-        collect_child_geometry(node.cargo,key,tree))
+function recurse_child_geometry(node::Union{TransportUnitNode,AssemblyNode},
+        tree,key=BaseGeomKey(),depth=typemax(Int)
+        )
+    if depth < 0
+        return nothing
+    end
+    geom = [get_base_geom(node,key)]
+    child_geom = recurse_child_geometry(required_transforms_to_children(node),tree,key,depth-1)
+    if (geom[1] === nothing)
+        return child_geom
+    elseif (child_geom === nothing)
+        return geom
+    else
+        return Base.Iterators.flatten((geom,child_geom))
+    end
 end
 
 
@@ -777,7 +845,8 @@ function set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
     node = get_node(tree,parent)
     @assert has_component(node,child) "$(get_node(tree,child)) cannot be a child of $(node)"
     t = child_transform(node,child)
-    set_child!(tree,parent,get_vtx(tree,child),t,make_edge(tree,parent,child))
+    child_node = get_node(tree,child)
+    set_child!(tree,parent,get_vtx(tree,child),t,make_edge(tree,node,child_node))
 end
 set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,node_id(parent),args...)
 set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,node_id(child),args...)
@@ -840,8 +909,19 @@ function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
     return false
 end
 
+function construct_scene_dependency_graph(scene_tree)
+    G = DiGraph(nv(scene_tree))
+    for n in get_nodes(scene_tree)
+        for (child_id,_) in required_transforms_to_children(n)
+            add_edge!(G,get_vtx(scene_tree,n),get_vtx(scene_tree,child_id))
+        end
+    end
+    return G
+end
+
 """
-    compute_approximate_geometries!(scene_tree,key=HypersphereKey(),base_key=key; ϵ=0.0)
+    compute_approximate_geometries!(scene_tree,key=HypersphereKey(),base_key=key; 
+        leaves_only=false,ϵ=0.0)
 
 Walk up the tree, computing bounding spheres (or whatever other geometry).
 Args:
@@ -855,25 +935,46 @@ Example:
     BaseGeomKey geometry of all of that assembly's children.
 """
 function compute_approximate_geometries!(scene_tree,key=HypersphereKey(),base_key=key;
+    leaves_only=false,
     ϵ=0.0,
     )
-    for v in reverse(topological_sort_by_dfs(scene_tree))
-        node = get_node(scene_tree,v)
-        if !has_vertex(node.geom_hierarchy,key)
-            if isa(node,ObjectNode)
-                add_child_approximation!(node.geom_hierarchy,key,BaseGeomKey())
-            elseif isa(node,AssemblyNode)
-                add_child_approximation!(
-                    node.geom_hierarchy,
-                    key,
-                    BaseGeomKey(),
-                    [t(get_base_geom(get_node(scene_tree,id),base_key)) for (id,t) in assembly_components(node)]
-                    )
+    # Build dependency graph (to enable full topological sort)
+    G = construct_scene_dependency_graph(scene_tree)
+    ids = (get_vtx_id(scene_tree,v) for v in reverse(topological_sort_by_dfs(G)))
+    for node in node_iterator(scene_tree, ids)
+        h = node.geom_hierarchy
+        if !has_vertex(h,key)
+            if isa(node,Union{ObjectNode,RobotNode})
+                for (k1,k2) in [(BaseGeomKey(),base_key),(base_key, key)]
+                    if !has_vertex(h,k2)
+                        base_geom = recurse_child_geometry(node,scene_tree,k1,1)
+                        if !(base_geom === nothing)
+                            add_child_approximation!(h,k2,k1,base_geom)
+                        end
+                    end
+                end
+            elseif leaves_only == false
+                geoms = recurse_child_geometry(node,scene_tree,base_key,1)
+                if !(geoms === nothing)
+                    add_child_approximation!(h, key, BaseGeomKey(),geoms)
+                else
+                    @warn "Unable to recurse child geometry" node
+                end
             end
         end
     end
-    scene_tree
+    return scene_tree
 end
+
+export remove_geometry!
+remove_geometry!(n::GeometryHierarchy,key) = rem_node!(n,key)
+remove_geometry!(n::SceneNode,key) = rem_node!(n.geom_hierarchy,key)
+function remove_geometry!(scene_tree::SceneTree,key)
+    for n in get_nodes(scene_tree)
+        remove_geometry!(n,key)
+    end
+end
+
 
 """
     jump_to_final_configuration!(scene_tree;respect_edges=false)

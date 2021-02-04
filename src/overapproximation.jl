@@ -109,13 +109,9 @@ end
 ngon_overapprox_model(step::Float64=π/4,start=0.0,stop=2π-step) = ngon_overapprox_model(collect(start:step:stop))
 ngon_overapprox_model(n::Int,start=0.0) = ngon_overapprox_model(2π/n,start)
 
-function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {H<:AbstractPolytope}#{V,T,H<:HPolytope{T,V}}
-    # halfspaces = map(h->LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ), constraints_list(model))
-    # sort!(halfspaces; by = h->h.b)
+function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {H<:AbstractPolytope}
     hpoly = H()
-    # for h in halfspaces
     for h in constraints_list(model)
-        # addconstraint!(hpoly,h)
         addconstraint!(hpoly,LazySets.HalfSpace(h.a, ρ(h.a, lazy_set)+ϵ))
     end
     hpoly
@@ -154,22 +150,39 @@ end
 Returns an iterator over points and radii.
 """
 extract_points_and_radii(n::GeometryBasics.Ngon) = zip(coordinates(n),Base.Iterators.repeated(0.0))
+
+function extract_points_and_radii(n::GeometryBasics.Cylinder,c=16)
+    # Approximate, because there's no other way to account for the cylinder's flat top and bottom
+    v = normalize(n.extremity - n.origin)
+    θ_range = 0.0:(2π/c):(2π*(c-1)/c)
+    extract_points_and_radii(Base.Iterators.flatten([
+        map(θ->SVector(n.origin+normalize(cross(SVector{3,Float64}(cos(θ),sin(θ),0.0),v))*n.r),θ_range),
+        map(θ->SVector(n.extremity+normalize(cross(SVector{3,Float64}(cos(θ),sin(θ),0.0),v))*n.r),θ_range),
+    ]))
+end
 extract_points_and_radii(n::Ball2) = [(n.center,n.radius)]
 extract_points_and_radii(n::Union{Hyperrectangle,AbstractPolytope}) = zip(LazySets.vertices(n),Base.Iterators.repeated(0.0))
-function extract_points_and_radii(n::AbstractVector) # where {U<:Union{LazySet,AbstractGeometry,SVector}} 
-    Base.Iterators.flatten(map(extract_points_and_radii,n))
+for T in (:AbstractVector,:(Base.Iterators.Flatten),:(Base.Generator))
+    @eval extract_points_and_radii(n::$T) = Base.Iterators.flatten(map(extract_points_and_radii,n))
 end
 extract_points_and_radii(n::SVector) = [(n,0.0)]
 extract_points_and_radii(n::Point) = [(n,0.0)]
 LazySets.dim(::Type{GeometryBasics.Ngon{N,T,M,P}}) where {N,T,M,P} = N
 LazySets.dim(::GeometryBasics.Ngon{N,T,M,P}) where {N,T,M,P} = N
 LazySets.dim(::Vector{GeometryBasics.Ngon{N,T,M,P} where {T,M,P}}) where {N} = N
-LazySets.dim(v::AbstractVector) = LazySets.dim(v[1])
+LazySets.dim(::Type{G}) where {N,T,G<:GeometryBasics.GeometryPrimitive{N,T}} = N
+LazySets.dim(n::GeometryBasics.GeometryPrimitive) = LazySets.dim(typeof(n))
+# LazySets.dim(n::AbstractVector{G}) where {G<:GeometryBasics.GeometryPrimitive} = LazySets.dim(en)
+LazySets.dim(::Point{N,T}) where {N,T} = N
+LazySets.dim(::SVector{N,T}) where {N,T} = N
+LazySets.dim(::AbstractVector{V}) where {V} = LazySets.dim(V)
+LazySets.dim(it::Base.Iterators.Flatten) = LazySets.dim(collect(Base.Iterators.take(it,1))[1])
+LazySets.dim(it::Base.Generator) = LazySets.dim(collect(Base.Iterators.take(it,1))[1])
 # LazySets.dim(::V) where {U<:AbstractGeometry,V<:AbstractVector{U}} = LazySets.dim(U)
 
 Base.convert(::Type{Ball2{T,V}},b::Ball2) where {T,V} = Ball2(V(b.center),T(b.radius))
 
-for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon))
+for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any)
     @eval begin
         function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {H<:Ball2}
             model = Model(default_optimizer())
