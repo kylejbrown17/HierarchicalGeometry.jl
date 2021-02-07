@@ -74,13 +74,14 @@ let
         b = CT.Translation(rand(3)) ∘ CT.LinearMap(rand(RotMatrix{3,Float64}))
         t = inv(a) ∘ b
         p = rand(3)
+        @test array_isapprox(HG.interpolate_rotation(a.linear,b.linear,1.0), t.linear;atol=1e-6,rtol=1e-6)
         @test isapprox(norm(b(p) - (a ∘ t)(p)),0.0;atol=1e-6,rtol=1e-6)
         @test isapprox(norm(a(p) - (b ∘ inv(t))(p)),0.0;atol=1e-6,rtol=1e-6)
     end
 
     # Interpolate from one transform to another
     p = SVector(0.0,1.0,0.0) # point p starts at origin
-    a = CoordinateTransformations.Translation(0,2,0) ∘ CoordinateTransformations.LinearMap(RotZ(0.25*π))
+    a = CoordinateTransformations.Translation(0,2,0) ∘ CoordinateTransformations.LinearMap(RotX(0.25*π))
     @show a
     @show a(p) # move point p - rotate first, then translate (i.e, a.translation ∘ a.linear )
     b = CoordinateTransformations.Translation(4,0,0) ∘ CoordinateTransformations.LinearMap(RotZ(0.75*π))

@@ -130,17 +130,19 @@ export relative_transform
 """
     relative_transform(a::AffineMap,b::AffineMap)
 
-compute the relative transform between two frames, ᵂT𝐀 and ᵂT𝐁.
-```@julia
-    t = HierarchicalGeometry.relative_transform(a,b) # parent,child
-    (t ∘ a)(p) == t(a(p)) == b(p)
-````
+compute the relative transform `t` between two frames, `a`, and `b` such that
+    t = inv(a) ∘ b
+    b = a ∘ t
+    a = b ∘ inv(t)
+
+    i.e. (a ∘ t)(p) == a(t(p)) == b(p)
 """
 function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
-    pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
-    rot_err = Rotations.rotation_error(a,b,error_map)
-    q = UnitQuaternion(rot_err)
-    t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
+    t = inv(a) ∘ b
+    # pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
+    # rot_err = Rotations.rotation_error(a,b,error_map)
+    # q = UnitQuaternion(rot_err)
+    # t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
 end
 function Rotations.rotation_error(
     a::CoordinateTransformations.AffineMap,
@@ -156,6 +158,20 @@ for op in (:relative_transform,:(Rotations.rotation_error))
         global_transform(tree,child),
         args...
     )
+end
+
+"""
+    interpolate_transforms(Ra,Rb,c=0.5)
+
+compute a rotation matrix `ΔR` such that `Ra*ΔR` is c/1.0 of the way to `Rb`.
+    R = R⁻¹ Rb
+    θ = axis + magnitude representation
+    ΔR = exp(cross_product_operator(θ)*c)
+"""
+function interpolate_rotation(Ra,Rb,c=0.5)
+    R = inv(Ra) * Rb
+    r = RotationVec(R) # rotation vector
+    RotationVec(r.sx*c,r.sy*c,r.sz*c)
 end
 
 export
@@ -917,21 +933,21 @@ function disband!(tree::SceneTree,n::TransportUnitNode)
     return true
 end
 
-global CAPTURE_DISTANCE = 1e-2
-capture_distance() = CAPTURE_DISTANCE
-function set_capture_distance!(val)
-    global CAPTURE_DISTANCE = val
+global CAPTURE_DISTANCE_TOLERANCE = 1e-2
+capture_distance_tolerance() = CAPTURE_DISTANCE_TOLERANCE
+function set_capture_distance_tolerance!(val)
+    global CAPTURE_DISTANCE_TOLERANCE = val
 end
-global CAPTURE_ROTATION_ERROR = 1e-2
-capture_rotation_error() = CAPTURE_ROTATION_ERROR
-function set_capture_rotation_error!(val)
-    global CAPTURE_ROTATION_ERROR = val
+global CAPTURE_ROTATION_TOLERANCE = 1e-2
+capture_rotation_tolerance() = CAPTURE_ROTATION_TOLERANCE
+function set_capture_rotation_tolerance!(val)
+    global CAPTURE_ROTATION_TOLERANCE = val
 end
 
 export is_within_capture_distance
 
 """
-    is_within_capture_distance(parent,child,ttol=capture_distance(),rtol=capture_rotation_error())
+    is_within_capture_distance(parent,child,ttol=capture_distance_tolerance(),rtol=capture_rotation_tolerance())
 
 Returns true if the error between `relative_transform(parent,child)` and 
 `child_transform(parent,node_id(child))` is small enough for capture of `child` 
@@ -942,7 +958,7 @@ function is_within_capture_distance(parent::SceneNode,child::SceneNode,args...)
     t_des   = child_transform(parent,node_id(child))
     is_within_capture_distance(t,t_des,args...)
 end
-function is_within_capture_distance(t,t_des,ttol=capture_distance(),rtol=capture_rotation_error())
+function is_within_capture_distance(t,t_des,ttol=capture_distance_tolerance(),rtol=capture_rotation_tolerance())
     et = norm(t.translation - t_des.translation) # translation error
     er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
     if et < ttol && er < rtol
@@ -957,7 +973,7 @@ end
 If the transform error of `v` relative to the transform prescribed for it by `u`
 is small, allow `u` to capture `v` (`v` becomes a child of `u`).
 """
-function capture_child!(tree::SceneTree,u,v,ttol=capture_distance(),rtol=capture_rotation_error())
+function capture_child!(tree::SceneTree,u,v,ttol=capture_distance(),rtol=capture_rotation_tolerance())
     nu = get_node(tree,u)
     nv = get_node(tree,v)
     @assert has_component(nu,node_id(nv)) "$nu cannot capture $nv"
