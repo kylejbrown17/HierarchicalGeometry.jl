@@ -175,6 +175,10 @@ LazySets.dim(n::GeometryBasics.GeometryPrimitive) = LazySets.dim(typeof(n))
 # LazySets.dim(n::AbstractVector{G}) where {G<:GeometryBasics.GeometryPrimitive} = LazySets.dim(en)
 LazySets.dim(::Point{N,T}) where {N,T} = N
 LazySets.dim(::SVector{N,T}) where {N,T} = N
+LazySets.dim(::Type{Point{N,T}}) where {N,T} = N
+LazySets.dim(::Type{SVector{N,T}}) where {N,T} = N
+LazySets.dim(::Type{Ball2{T,V}}) where {T,V} = LazySets.dim(V)
+LazySets.dim(::Type{Hyperrectangle{T,U,V}}) where {T,U,V} = LazySets.dim(V)
 LazySets.dim(::AbstractVector{V}) where {V} = LazySets.dim(V)
 LazySets.dim(it::Base.Iterators.Flatten) = LazySets.dim(collect(Base.Iterators.take(it,1))[1])
 LazySets.dim(it::Base.Generator) = LazySets.dim(collect(Base.Iterators.take(it,1))[1])
@@ -184,7 +188,8 @@ Base.convert(::Type{Ball2{T,V}},b::Ball2) where {T,V} = Ball2(V(b.center),T(b.ra
 
 for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any)
     @eval begin
-        function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {H<:Ball2}
+        # function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {H<:Ball2}
+        function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(H)) where {H<:Ball2}
             model = Model(default_optimizer())
             set_optimizer_attributes(model,default_optimizer_attributes()...)
             @variable(model,v[1:N])

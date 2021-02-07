@@ -65,14 +65,99 @@ let
 end
 # relative transformations
 let
-    a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotZ(0.0)))
-    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotZ(0.75*π)))
-    rot_err = Rotations.rotation_error(a,b)
-    t = HierarchicalGeometry.relative_transform(a,b)
-    @test array_isapprox(inv(t.linear),b.linear;rtol=1e-12,atol=1e-12)
+    # Show how to compute a relative transform
+    # t = inv(a) ∘ b
+    # b = a ∘ t
+    # a = b ∘ inv(t)
+    for i in 1:10
+        a = CT.Translation(rand(3)) ∘ CT.LinearMap(rand(RotMatrix{3,Float64}))
+        b = CT.Translation(rand(3)) ∘ CT.LinearMap(rand(RotMatrix{3,Float64}))
+        t = inv(a) ∘ b
+        p = rand(3)
+        @test isapprox(norm(b(p) - (a ∘ t)(p)),0.0;atol=1e-6,rtol=1e-6)
+        @test isapprox(norm(a(p) - (b ∘ inv(t))(p)),0.0;atol=1e-6,rtol=1e-6)
+    end
 
-    a = compose(CoordinateTransformations.Translation(1,0,0),CoordinateTransformations.LinearMap(RotXYZ(0.0,0.0,0.0)))
-    b = compose(CoordinateTransformations.Translation(1,4,0),CoordinateTransformations.LinearMap(RotXYZ(0.1,0.0,1.0*π)))
+    # Interpolate from one transform to another
+    p = SVector(0.0,1.0,0.0) # point p starts at origin
+    a = CoordinateTransformations.Translation(0,2,0) ∘ CoordinateTransformations.LinearMap(RotZ(0.25*π))
+    @show a
+    @show a(p) # move point p - rotate first, then translate (i.e, a.translation ∘ a.linear )
+    b = CoordinateTransformations.Translation(4,0,0) ∘ CoordinateTransformations.LinearMap(RotZ(0.75*π))
+    @show b
+    @show b(p)
+    # try to build up to global transform b, starting from a
+    # t = HierarchicalGeometry.relative_transform(a,b) # parent,child
+    t = inv(a) ∘ b
+    # b = a ∘ t
+    # a = b ∘ inv(t)
+    @show t
+    @show (a ∘ t)(p) # first transform point by t, then by a, to get the same transform as b
+    @show a(t(p)) # first transform point by t, then by a, to get the same transform as b
+    # How to move incrementally from a to b with multiple intermediate transformations?
+    dt = 0.2
+    v_max = 2.0
+    ω_max = 1.0
+    c = a
+    goal = b
+    for k in 1:15
+        # delta = HG.relative_transform(c,goal) # remaining difference between c and b
+        delta = inv(c) ∘ goal
+        # translation error
+        dx = delta.translation
+        if norm(dx) <= 1e-4
+            vel = SVector(0.0,0.0,0.0)
+        else
+            vel = normalize(dx) * min(v_max, norm(dx)/dt)
+        end
+        Δx = vel*dt # translation increment
+        # rotation error
+        r = RotationVec(delta.linear) # rotation vector
+        θ = SVector(r.sx,r.sy,r.sz) # convert r to svector
+        if norm(θ) <= 1e-4
+            # no more rotating to do
+            ΔR = SMatrix{3,3,Float64}(I)
+        else
+            ω = normalize(θ) * min(ω_max, norm(θ)/dt)
+            ΔR = exp(cross_product_operator(ω)*dt)
+        end
+        # First move in the direction of 
+        # Δ = CT.LinearMap(ΔR) ∘ CT.Translation(Δx)
+        Δ = CT.Translation(Δx) ∘ CT.LinearMap(ΔR)
+        # global c = Δ ∘ c
+        global c = c ∘ Δ
+        @show c(p)
+    end
+
+
+    # Initialize a rotation matrix
+    R = rand(RotMatrix{3,Float64})
+    # compute the axis and magnitude of rotation
+    r = RotationVec(R) 
+    vec = SVector(r.sx,r.sy,r.sz)
+    # reconstruct the matrix
+    Rr = exp(cross_product_operator(vec))
+    # check that Rr == R
+    @test array_isapprox( inv(Rr)*R, SMatrix{3,3,Float64}(I); rtol=1e-5,atol=1e-5) 
+    # Show that we can chain partial rotations to reconstruct R
+    Rr = exp(cross_product_operator(vec*0.25))
+    @test array_isapprox( inv(Rr)*inv(Rr)*inv(Rr)*inv(Rr)*R, SMatrix{3,3,Float64}(I); rtol=1e-5,atol=1e-5)
+
+
+
+
+    a(t(p))
+    @test array_isapprox(inv(t.linear),b.linear;rtol=1e-12,atol=1e-12)
+    @test array_isapprox(a.linear*inv(t.linear),b.linear;rtol=1e-12,atol=1e-12)
+    ω = RotationVec(UnitQuaternion(inv(t.linear)))
+    vec = SVector(ω.sx, ω.sy, ω.sz)
+    dt = 0.1
+    R = a
+
+    exp(cross_product_operator(vec))
+
+    a = CoordinateTransformations.Translation(1,0,0) ∘ CoordinateTransformations.LinearMap(RotXYZ(0.0,0.0,0.0))
+    b = CoordinateTransformations.Translation(1,4,0) ∘ CoordinateTransformations.LinearMap(RotXYZ(0.1,0.0,1.0*π))
     t = HierarchicalGeometry.relative_transform(a,b)
 end
 # Test TransformNode

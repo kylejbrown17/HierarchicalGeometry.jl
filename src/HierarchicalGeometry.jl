@@ -126,10 +126,15 @@ identity_linear_map() = identity_linear_map3()
 scaled_linear_map(scale) = CoordinateTransformations.LinearMap(scale*one(SMatrix{3,3,Float64})) ∘ identity_linear_map()
 Base.convert(::Type{Hyperrectangle{Float64,T,T}},rect::Hyperrectangle) where {T} = Hyperrectangle(T(rect.center),T(rect.radius))
 
+export relative_transform
 """
     relative_transform(a::AffineMap,b::AffineMap)
 
 compute the relative transform between two frames, ᵂT𝐀 and ᵂT𝐁.
+```@julia
+    t = HierarchicalGeometry.relative_transform(a,b) # parent,child
+    (t ∘ a)(p) == t(a(p)) == b(p)
+````
 """
 function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
     pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
@@ -291,15 +296,19 @@ function GraphUtils.propagate_forward!(parent::TransformNode,child::TransformNod
     end
 end
 function set_local_transform!(n::TransformNode,t,update=false)
-    n.local_transform = t
+    n.local_transform = t ∘ identity_linear_map() # guarantee AffineMap?
     set_tf_up_to_date!(n,false)
     if update
         global_transform(n) # just get the global transform
     end
     return n.local_transform
 end
+function set_local_transform_in_global_frame!(n::TransformNode,t,args...)
+    rot_mat = CT.LinearMap(global_transform(get_parent(n)).linear)
+    set_local_transform!(n, inv(rot_mat) ∘ t )
+end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
-const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!]
+const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!,:set_local_transform_in_global_frame!]
 
 for op in transform_node_accessor_interface
     @eval $op(tree::AbstractCustomTree,v) = $op(get_node(tree,v))
@@ -572,6 +581,7 @@ export
     TransportUnitNode,
         robot_team,
         add_robot!,
+        remove_robot!,
         cargo_id,
         cargo_type,
     SceneTree,
@@ -620,6 +630,11 @@ GraphUtils.set_parent!(a::CustomNode,b::CustomNode) = set_parent!(node_val(a),no
 GraphUtils.rem_parent!(a::GeomNode) = rem_parent!(get_transform_node(a))
 GraphUtils.rem_parent!(a::SceneNode) = rem_parent!(a.geom)
 GraphUtils.rem_parent!(a::CustomNode) = rem_parent!(node_val(a))
+for op in (:(GraphUtils.has_parent),:(GraphUtils.has_child),:(GraphUtils.has_descendant))
+    @eval begin
+        $op(a::SceneNode,b::SceneNode) = $op(get_transform_node(a),get_transform_node(b))
+    end
+end
 
 get_cached_geom(n::SceneNode,k::GeometryKey) = get_cached_geom(n.geom_hierarchy,k)
 get_base_geom(n::SceneNode,k::GeometryKey) = get_base_geom(n.geom_hierarchy,k)
@@ -658,6 +673,7 @@ struct RobotNode{R} <: SceneNode
 end
 RobotNode(id::BotID,geom) = RobotNode(id,geom,geom_hierarchy(geom))
 RobotNode(n::RobotNode,geom) = RobotNode(n.id,geom)
+RobotNode(id::BotID,n::RobotNode) = RobotNode(id,n.geom,n.geom_hierarchy)
 
 struct ObjectNode <: SceneNode
     id::ObjectID
@@ -705,7 +721,7 @@ function required_transforms_to_children(n::TransportUnitNode)
     merge(robot_team(n),Dict(n.cargo))
 end
 
-const TransportUnitID = TemplatedID{T} where {T<:TransportUnitNode}
+const TransportUnitID = TemplatedID{Tuple{T,C}} where {C,T<:TransportUnitNode}
 GraphUtils.node_id(n::TransportUnitNode{C,T}) where {C,T} = TemplatedID{Tuple{TransportUnitNode,C}}(get_id(cargo_id(n)))
 Base.convert(::Pair{A,B},pair) where {A,B} = convert(A,pair.first)=>convert(B,p.second) 
 
@@ -714,8 +730,22 @@ has_component(n::TransportUnitNode,id::BotID)       = haskey(robot_team(n),id)
 child_transform(n::TransportUnitNode,id::Union{ObjectID,AssemblyID}) = has_component(n,id) ? n.cargo.second : throw(ErrorException("TransportUnitNode $n does not have component $id"))
 child_transform(n::TransportUnitNode,id::BotID)     = robot_team(n)[id]
 add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
+remove_robot!(n::TransportUnitNode,id)              = delete!(robot_team(n),id)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
 add_robot!(n::TransportUnitNode,t::CT.AffineMap)    = add_robot!(n,get_unique_invalid_id(RobotID)=>t)
+"""
+    swap_robot_id!(transport_unit,old_id,new_id)
+
+Robot `new_id` takes robot `old_id`'s plave in `robot_team(transport_unit)`.
+"""
+function swap_robot_id!(transport_unit,old_id,new_id)
+    team = robot_team(transport_unit)
+    tform = child_transform(transport_unit,old_id)
+    @info "robot team before swap" team
+    remove_robot!(transport_unit,old_id)
+    add_robot!(transport_unit,new_id=>tform)
+    @info "robot team after swap" team
+end
 
 export recurse_child_geometry
 
@@ -781,7 +811,7 @@ abstract type SceneTreeEdge end
 struct PermanentEdge <: SceneTreeEdge end
 struct TemporaryEdge <: SceneTreeEdge end
 for U in (:TransportUnitID,:TransportUnitNode)
-    for V in (:RobotID,:RobotNode,:AssemblyID,:AssemblyNode)
+    for V in (:RobotID,:RobotNode,:AssemblyID,:AssemblyNode,:ObjectID,:ObjectNode)
         @eval GraphUtils.make_edge(g,u::$U,v::$V) = TemporaryEdge()
     end
 end
@@ -849,7 +879,12 @@ function set_child!(tree::SceneTree,parent::AbstractID,child::AbstractID)
     set_child!(tree,parent,get_vtx(tree,child),t,make_edge(tree,node,child_node))
 end
 set_child!(tree::SceneTree,parent::SceneNode,args...) = set_child!(tree,node_id(parent),args...)
+set_child!(tree::SceneTree,parent::SceneNode,child::SceneNode) = set_child!(tree,node_id(parent),node_id(child))
 set_child!(tree::SceneTree,parent::AbstractID,child::SceneNode,args...) = set_child!(tree,parent,node_id(child),args...)
+function force_remove_edge!(tree::SceneTree,u,v)
+    rem_parent!(get_node(tree,v))
+    GraphUtils.delete_edge!(tree,u,v)
+end
 
 """
     LightGraphs.rem_edge!(tree::SceneTree,u,v)
@@ -861,8 +896,9 @@ function LightGraphs.rem_edge!(tree::SceneTree,u,v)
         return true
     end
     @assert !isa(get_edge(tree,u,v),PermanentEdge) "Edge $u → $v is permanent!"
-    rem_parent!(get_node(tree,v))
-    GraphUtils.delete_edge!(tree,u,v)
+    force_remove_edge!(tree,u,v)
+    # rem_parent!(get_node(tree,v))
+    # GraphUtils.delete_edge!(tree,u,v)
 end
 
 """
@@ -881,21 +917,51 @@ function disband!(tree::SceneTree,n::TransportUnitNode)
     return true
 end
 
+global CAPTURE_DISTANCE = 1e-2
+capture_distance() = CAPTURE_DISTANCE
+function set_capture_distance!(val)
+    global CAPTURE_DISTANCE = val
+end
+global CAPTURE_ROTATION_ERROR = 1e-2
+capture_rotation_error() = CAPTURE_ROTATION_ERROR
+function set_capture_rotation_error!(val)
+    global CAPTURE_ROTATION_ERROR = val
+end
+
+export is_within_capture_distance
+
+"""
+    is_within_capture_distance(parent,child,ttol=capture_distance(),rtol=capture_rotation_error())
+
+Returns true if the error between `relative_transform(parent,child)` and 
+`child_transform(parent,node_id(child))` is small enough for capture of `child` 
+by parent.
+"""
+function is_within_capture_distance(parent::SceneNode,child::SceneNode,args...)
+    t       = relative_transform(global_transform(parent),global_transform(child))
+    t_des   = child_transform(parent,node_id(child))
+    is_within_capture_distance(t,t_des,args...)
+end
+function is_within_capture_distance(t,t_des,ttol=capture_distance(),rtol=capture_rotation_error())
+    et = norm(t.translation - t_des.translation) # translation error
+    er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
+    if et < ttol && er < rtol
+        return true
+    end
+    return false
+end
+
 """
     capture_child!(tree::SceneTree,u,v,ttol,rtol)
 
 If the transform error of `v` relative to the transform prescribed for it by `u`
 is small, allow `u` to capture `v` (`v` becomes a child of `u`).
 """
-function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
+function capture_child!(tree::SceneTree,u,v,ttol=capture_distance(),rtol=capture_rotation_error())
     nu = get_node(tree,u)
     nv = get_node(tree,v)
     @assert has_component(nu,node_id(nv)) "$nu cannot capture $nv"
-    t = relative_transform(tree,u,v)
-    t_des = child_transform(nu,node_id(nv))
-    et = norm(t.translation - t_des.translation) # translation error
-    er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
-    if et < ttol && er < rtol
+    if is_within_capture_distance(get_node(tree,u),get_node(tree,v),ttol,rtol)
         if !is_root_node(tree,v)
             p = get_node(tree,get_parent(tree,v)) # current parent
             @assert(isa(p, TransportUnitNode),
@@ -906,6 +972,21 @@ function capture_child!(tree::SceneTree,u,v,ttol=1e-2,rtol=1e-2)
         end
         return set_child!(tree,u,v)
     end
+    # t = relative_transform(tree,u,v)
+    # t_des = child_transform(nu,node_id(nv))
+    # et = norm(t.translation - t_des.translation) # translation error
+    # er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
+    # if et < ttol && er < rtol
+    #     if !is_root_node(tree,v)
+    #         p = get_node(tree,get_parent(tree,v)) # current parent
+    #         @assert(isa(p, TransportUnitNode),
+    #             "Trying to capture child $v from non-TransportUnit parent $p")
+    #         # NOTE that there may be a time gap if the cargo has to be lifted
+    #         # into place by a separate "robot"
+    #         disband!(tree,p)
+    #     end
+    #     return set_child!(tree,u,v)
+    # end
     return false
 end
 
@@ -982,12 +1063,17 @@ end
 Jump to the final configuration state wherein all `ObjectNode`s and 
 `AssemblyNode`s are in the configurations specified by their parent assemblies.
 """
-function jump_to_final_configuration!(scene_tree;respect_edges=false)
+function jump_to_final_configuration!(scene_tree;respect_edges=false,set_edges=false)
     for node in get_nodes(scene_tree)
         if matches_template(AssemblyNode,node)
             for (id,tform) in assembly_components(node)
                 if !respect_edges || has_edge(scene_tree,node,id)
                     set_local_transform!(get_node(scene_tree,id),tform)
+                end
+                if set_edges
+                    if !has_edge(scene_tree,node,id)
+                        set_child!(scene_tree,node,id)
+                    end
                 end
             end 
         end
