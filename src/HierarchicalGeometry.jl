@@ -158,6 +158,11 @@ for op in (:relative_transform,:(Rotations.rotation_error))
         global_transform(tree,child),
         args...
     )
+    @eval $op(parent,child,args...) = $op(
+        global_transform(parent),
+        global_transform(child),
+        args...
+    )
 end
 
 """
@@ -600,8 +605,10 @@ export
         remove_robot!,
         cargo_id,
         cargo_type,
+        is_in_formation,
     SceneTree,
         capture_child!,
+        capture_robots!,
         disband!
 
 const TransformDict{T} = Dict{T,CoordinateTransformations.Transformation}
@@ -749,6 +756,21 @@ add_robot!(n::TransportUnitNode,p)                  = push!(robot_team(n),p)
 remove_robot!(n::TransportUnitNode,id)              = delete!(robot_team(n),id)
 add_robot!(n::TransportUnitNode,r,t)                = add_robot!(n,r=>t)
 add_robot!(n::TransportUnitNode,t::CT.AffineMap)    = add_robot!(n,get_unique_invalid_id(RobotID)=>t)
+function is_in_formation(n::TransportUnitNode,scene_tree)
+    all([has_edge(scene_tree,n,id) for (id,_) in robot_team(n)])
+end
+function capture_robots!(agent::TransportUnitNode,scene_tree)
+    formed = true
+    for (robot_id,_) in robot_team(agent)
+        if !has_edge(scene_tree,agent,robot_id)
+            if !capture_child!(scene_tree,agent,robot_id)
+                formed = false
+            end
+        end
+    end
+    return formed
+end
+
 """
     swap_robot_id!(transport_unit,old_id,new_id)
 
@@ -973,7 +995,7 @@ end
 If the transform error of `v` relative to the transform prescribed for it by `u`
 is small, allow `u` to capture `v` (`v` becomes a child of `u`).
 """
-function capture_child!(tree::SceneTree,u,v,ttol=capture_distance(),rtol=capture_rotation_tolerance())
+function capture_child!(tree::SceneTree,u,v,ttol=capture_distance_tolerance(),rtol=capture_rotation_tolerance())
     nu = get_node(tree,u)
     nv = get_node(tree,v)
     @assert has_component(nu,node_id(nv)) "$nu cannot capture $nv"
