@@ -48,8 +48,28 @@ get_center(s::Hyperrectangle) = s.center
 get_radius(s::Hyperrectangle) = s.radius
 GeometryBasics.HyperRectangle(s::Hyperrectangle) = GeometryBasics.HyperRectangle(Vec((s.center .- s.radius)...),2*Vec(s.radius...))
 
+"""
+    centroid(pts::Vector{V}) where {V<:AbstractVector}
+
+Compute the centroid of the polygon whose vertices are defined (in ccw order) by 
+`pts`.
+"""
+function centroid(pts::Vector{V}) where {V<:AbstractVector}
+    p1 = pts[1]
+    total_area = 0.0
+    c = zero(V)
+    for (p2,p3) in zip(pts[2:end-1],pts[3:end])
+        a = GeometryBasics.area([p1,p2,p3])
+        total_area += a
+        c = ((total_area-a)/total_area)*c .+ (a/total_area) * (p1 .+ p2 .+ p3) / 3
+    end
+    c
+end
+
 export 
     default_robot_geom,
+    default_robot_radius,
+    default_robot_height,
     set_default_robot_geom!
 
 global DEFAULT_ROBOT_GEOM = GeometryBasics.Cylinder(
@@ -70,6 +90,23 @@ Set the default robot geometry.
 """
 function set_default_robot_geom!(geom)
     global DEFAULT_ROBOT_GEOM = geom
+end
+
+function default_robot_radius()
+    geom = default_robot_geom()
+    if isa(geom,Cylinder)
+        return geom.r
+    else
+        return 0.25
+    end
+end
+function default_robot_height()
+    geom = default_robot_geom()
+    if isa(geom,Cylinder)
+        return norm(geom.origin-geom.extremity)
+    else
+        return 0.1
+    end
 end
 
 include("overapproximation.jl")
@@ -328,8 +365,35 @@ function set_local_transform_in_global_frame!(n::TransformNode,t,args...)
     rot_mat = CT.LinearMap(global_transform(get_parent(n)).linear)
     set_local_transform!(n, inv(rot_mat) ∘ t )
 end
+"""
+    set_desired_global_transform!(n::TransformNode,t,args...)
+
+Set a transform node's global local transform such that its global transform 
+(respecting it's current parent) will be `t`.
+"""
+function set_desired_global_transform!(n::TransformNode,t,args...)
+    if has_parent(n,n)
+        set_local_transform!(n,t)
+    else
+        parent = get_parent(n)
+        tform = relative_transform(global_transform(parent),t)
+        set_local_transform_in_global_frame!(n,tform)
+    end
+end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
 const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!,:set_local_transform_in_global_frame!]
+"""
+    rem_parent!(child::TransformNode)
+
+Ensure that the detached child does not "jump" in the global frame when detached 
+from the parent.
+"""
+function GraphUtils.rem_parent!(child::TransformNode)
+    tf = global_transform(child)
+    delete!(get_children(get_parent(child)), node_id(child))
+    set_local_transform!(child,tf)
+    child.parent = child
+end
 
 for op in transform_node_accessor_interface
     @eval $op(tree::AbstractCustomTree,v) = $op(get_node(tree,v))
@@ -779,10 +843,10 @@ Robot `new_id` takes robot `old_id`'s plave in `robot_team(transport_unit)`.
 function swap_robot_id!(transport_unit,old_id,new_id)
     team = robot_team(transport_unit)
     tform = child_transform(transport_unit,old_id)
-    @info "robot team before swap" team
+    # @info "robot team before swap" team
     remove_robot!(transport_unit,old_id)
     add_robot!(transport_unit,new_id=>tform)
-    @info "robot team after swap" team
+    # @info "robot team after swap" team
 end
 
 export recurse_child_geometry
