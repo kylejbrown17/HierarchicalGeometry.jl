@@ -42,6 +42,8 @@ const BaseGeometry = Union{Ball2,Hyperrectangle,AbstractPolytope}
 const BallType = Ball2
 get_center(s::Ball2) = LazySets.center(s)
 get_radius(s::Ball2) = s.radius
+get_center(s::HyperSphere) = s.center
+get_radius(s::HyperSphere) = s.r
 GeometryBasics.Sphere(s::Ball2) = GeometryBasics.Sphere(Point(s.center...),s.radius)
 const RectType = Hyperrectangle
 get_center(s::Hyperrectangle) = s.center
@@ -107,6 +109,25 @@ function default_robot_height()
     else
         return 0.1
     end
+end
+
+
+const Z_PROJECTION_MAT = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
+
+"""
+    project_to_2d(geom,t=CoordinateTransformations.LinearMap(Z_PROJECTION_MAT)) = t(geom)
+"""
+project_to_2d(geom,t=CoordinateTransformations.LinearMap(Z_PROJECTION_MAT)) = t(geom)
+
+"""
+    project_to_3d(geom,t=CoordinateTransformations.LinearMap(transpose(Z_PROJECTION_MAT))) = t(geom)
+"""
+project_to_3d(geom,t=CoordinateTransformations.LinearMap(transpose(Z_PROJECTION_MAT))) = t(geom)
+
+function project_rotation_to_XY(rot_mat)
+    z = rot_mat[:,3] # z column
+    rb = rotation_between(SVector(0.0,0.0,1.0),z)
+    rot_z = inv(rb) * rot_mat
 end
 
 include("overapproximation.jl")
@@ -203,7 +224,7 @@ for op in (:relative_transform,:(Rotations.rotation_error))
 end
 
 """
-    interpolate_transforms(Ra,Rb,c=0.5)
+    interpolate_rotation(Ra,Rb,c=0.5)
 
 compute a rotation matrix `ΔR` such that `Ra*ΔR` is c/1.0 of the way to `Rb`.
     R = R⁻¹ Rb
@@ -214,6 +235,11 @@ function interpolate_rotation(Ra,Rb,c=0.5)
     R = inv(Ra) * Rb
     r = RotationVec(R) # rotation vector
     RotationVec(r.sx*c,r.sy*c,r.sz*c)
+end
+function interpolate_transforms(Ta,Tb,c=0.5)
+    R = interpolate_rotation(Ta.linear,Tb.linear,c)
+    t = (1-c)*Ta.translation + c*Tb.translation
+    CT.Translation(t) ∘ CT.LinearMap(R)
 end
 
 export
@@ -381,7 +407,7 @@ function set_desired_global_transform!(n::TransformNode,t,args...)
     end
 end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
-const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!,:set_local_transform_in_global_frame!]
+const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!,:set_local_transform_in_global_frame!,:set_desired_global_transform!]
 """
     rem_parent!(child::TransformNode)
 
@@ -472,9 +498,8 @@ end
 for op in transform_node_mutator_interface
     @eval $op(g::GeomNode,args...) = $op(get_transform_node(g),args...)
 end
-function GraphUtils.set_parent!(a::GeomNode,b::GeomNode)
-    set_parent!(get_transform_node(a),get_transform_node(b))
-end
+GraphUtils.set_parent!(a::GeomNode,b::TransformNode) = set_parent!(get_transform_node(a),b)
+GraphUtils.set_parent!(a::GeomNode,b::GeomNode) = set_parent!(a,get_transform_node(b))
 function GraphUtils.propagate_forward!(t::TransformNode,n::GeomNode)
     transformed_geom = transform(get_base_geom(n),global_transform(n))
     set_cached_geom!(n,transformed_geom)
@@ -1169,14 +1194,16 @@ function jump_to_final_configuration!(scene_tree;respect_edges=false,set_edges=f
     for node in get_nodes(scene_tree)
         if matches_template(AssemblyNode,node)
             for (id,tform) in assembly_components(node)
-                if !respect_edges || has_edge(scene_tree,node,id)
-                    set_local_transform!(get_node(scene_tree,id),tform)
-                end
-                if set_edges
-                    if !has_edge(scene_tree,node,id)
-                        set_child!(scene_tree,node,id)
+                # if !has_edge(scene_tree,node,id)
+                    force_remove_edge!(scene_tree,node,id)
+                    set_child!(scene_tree,node,id)
+                    if !set_edges
+                        force_remove_edge!(scene_tree,node,id)
                     end
-                end
+                # end
+                # if !respect_edges || has_edge(scene_tree,node,id)
+                #     set_local_transform!(get_node(scene_tree,id),tform)
+                # end
             end 
         end
     end
@@ -1259,5 +1286,95 @@ function find_collision(table,env_state,env,i,t=0)
     return false, -1
 end
 
+#### Visibility Graphs
+
+"""
+    project_point_to_line(p,p1,p2)
+
+project `p` onto line between `p1` and `p2`
+"""
+function project_point_to_line(p,p1,p2)
+    base = p2-p1
+    leg = p-p1
+    v = dot(leg,base) * base / norm(base)^2
+end
+
+"""
+    circle_intersects_line(circle,line)
+
+Return true if `circle` intersect `line`.
+"""
+function circle_intersects_line(circle,line)
+    p1,p2 = line.points[1], line.points[2]
+    c = get_center(circle)
+    pt = project_point_to_line(c,p1,p2)
+    d = norm(p2-p1)
+    d1 = norm(p1-pt)
+    d2 = norm(p2-pt)
+    r = get_radius(circle)
+    if isapprox(d,d1+d2)
+        return r >= norm(c-pt)
+    else
+        return r >= norm(c-p1) || r >= norm(c-p2)
+    end
+end
+circle_intersects_line(circle,pt1,pt2) = circle_intersects_line(circle,
+    GeometryBasics.Line(Point(pt1),Point(pt2)))
+
+"""
+    construct_visibility_graph(circles)
+"""
+function construct_visibility_graph(circles::Dict)
+    graph = NEGraph{Graph,HyperSphere,Float64,keytype(circles)}()
+    for (k,geom) in circles
+        add_node!(graph,geom,k)
+    end
+    for v in LightGraphs.vertices(graph)
+        n = node_val(get_node(graph,v))
+        for v2 in Base.Iterators.rest(LightGraphs.vertices(graph),v)
+            n2 = node_val(get_node(graph,v2))
+            visible = true
+            line = GeometryBasics.Line(Point(n.center),Point(n2.center))
+            for v3 in LightGraphs.vertices(graph)
+                v3 == v || v3 == v2 ? continue : nothing
+                n3 = node_val(get_node(graph,v3))
+                if circle_intersects_line(n3,line)
+                    visible = false
+                    break
+                end
+            end
+            if visible
+                add_edge!(graph,v,v2,norm(n2.center-n.center))
+            end
+        end
+    end
+    graph
+end
+function LightGraphs.weights(g::NEGraph{Graph,N,Float64,ID}) where {N,ID}
+    m = zeros(nv(g),nv(g))
+    for e in edges(g)
+        edge = get_edge(g,e)
+        m[e.src,e.dst] = edge_val(edge)
+        m[e.dst,e.src] = edge_val(edge)
+    end
+    m
+end
+
+"""
+    get_tangent_pts_on_circle(circle,base_pt;)
+
+Returns the two points on a circle for which a line from `base_pt` through `pt`
+    is tangent to `circle`.
+"""
+function get_tangent_pts_on_circle(circle,base_pt;)
+    r = get_radius(circle)
+    c = get_center(circle)
+    c = c - base_pt
+    θ = asin(r/norm(c)) # angle of ray from x1 that is tangent to a circle of radius r centered at x2
+    R = SMatrix{2,2,Float64}([cos(θ+π/2) -sin(θ+π/2); sin(θ+π/2) cos(θ+π/2)])
+    v_left = R * c/norm(c)
+    v_right = R' * c/norm(c)
+    v_left, v_right
+end
 
 end

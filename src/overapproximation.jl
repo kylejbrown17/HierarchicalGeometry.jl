@@ -118,10 +118,6 @@ function LazySets.overapproximate(lazy_set,model::H,ϵ::Float64=0.0) where {H<:A
 end
 LazySets.overapproximate(lazy_set,m::PolyhedronOverapprox,args...) = overapproximate(lazy_set,make_polytope(m),args...)
 
-const Z_PROJECTION_MAT = SMatrix{2,3,Float64}(1.0,0.0,0.0,1.0,0.0,0.0)
-project_to_2d(geom,t=CoordinateTransformations.LinearMap(Z_PROJECTION_MAT)) = t(geom)
-project_to_3d(geom,t=CoordinateTransformations.LinearMap(transpose(Z_PROJECTION_MAT))) = t(geom)
-
 # Base.convert(::Type{Hyperrectangle{T,V,V}},r::Hyperrectangle) where {T,V,V} = Hyperrectangle(V(r.center),V(r.radius))
 
 for TYPE in (:VPolytope,:HPolytope)
