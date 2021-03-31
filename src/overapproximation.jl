@@ -25,7 +25,7 @@ A polygon constrained to not have any degenerate vertices
 struct BufferedPolygon
     halfspaces::Vector{LazySets.HalfSpace}
     pts::Vector{SVector{3,Float64}}
-    min_corner_depth::Float64 # minimum corner depth
+    min_face_length::Float64 # minimum face length
 end
 struct BufferedPolygonPrism
     p::BufferedPolygon
@@ -56,9 +56,17 @@ function compute_buffered_polygon(vecs,buffer,points_and_radii,ϵ=0.0;
         1:N,
         Base.Iterators.drop(Base.Iterators.cycle(1:N),1),
         )
-        @constraint(model,h[i] >= (h[j]+buffer)*dot(normalize(vecs[i]),normalize(vecs[j])))
+        # @constraint(model,h[i] >= (h[j]+buffer)*dot(normalize(vecs[i]),normalize(vecs[j])))
+        # @constraint(model,(h[i]+buffer) <= h[j]*1/dot(normalize(vecs[i]),normalize(vecs[j])))
         @constraint(model,dot(pts[1:M,i],vecs[i]) - h[i] == 0) 
         @constraint(model,dot(pts[1:M,i],vecs[j]) - h[j] == 0) 
+        # ensure that points are at least `buffer` distance apart
+        @constraint(model,
+            dot(
+                pts[1:M,i] .- pts[1:M,i],
+                normalize(cross(cross(vecs[i],vecs[j]),vecs[j]))
+                ) >= buffer
+            )
     end
     @objective(model,Min,sum(h))
     optimize!(model)
@@ -85,7 +93,7 @@ function compute_buffered_polygon_prism(vecs,buffer,points_and_radii,ϵ=0.0)
         BufferedPolygon(
             p.halfspaces,
             [pt .+ origin for pt in p.pts],
-            p.min_corner_depth),
+            p.min_face_length),
             origin,extremity)
 end
 function GeometryBasics.coordinates(p::BufferedPolygonPrism)
@@ -104,7 +112,7 @@ function GeometryBasics.faces(p::BufferedPolygonPrism)
 end
 
 function extract_points_and_radii(p::BufferedPolygonPrism)
-    d = norm(p.extremity - p.origin)
+    d = p.extremity - p.origin
     Base.Iterators.flatten(
         [((SVector{3,Float64}(pt[1],pt[2],pt[3]),0.0) for pt in p.p.pts),
         ((SVector{3,Float64}(pt[1]+d[1],pt[2]+d[2],pt[3]+d[3]),0.0) for pt in p.p.pts)],
@@ -315,14 +323,14 @@ for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any
         function LazySets.overapproximate(lazy_set::$T,m::BufferedPolygon,ϵ::Float64=0.0) where {A,V<:AbstractVector}
             compute_buffered_polygon(
                 [h.a for h in m.halfspaces],
-                m.min_corner_depth,
+                m.min_face_length,
                 extract_points_and_radii(lazy_set),
                 ϵ)
         end
         function LazySets.overapproximate(lazy_set::$T,m::BufferedPolygonPrism,ϵ::Float64=0.0) where {A,V<:AbstractVector}
             compute_buffered_polygon_prism(
                 [h.a for h in m.p.halfspaces],
-                m.p.min_corner_depth,
+                m.p.min_face_length,
                 extract_points_and_radii(lazy_set),
                 ϵ)
         end

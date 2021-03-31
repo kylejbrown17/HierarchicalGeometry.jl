@@ -166,7 +166,7 @@ for T in (
         (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
         (t::$T)(g::VPolygon) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolygon) = HPolytope(map(t, constraints_list(g)))
-        (t::$T)(g::BufferedPolygon) = BufferedPolygon(map(t,g.halfspaces),map(t,g.pts),g.min_corner_depth)
+        (t::$T)(g::BufferedPolygon) = BufferedPolygon(map(t,g.halfspaces),map(t,g.pts),g.min_face_length)
         (t::$T)(g::BufferedPolygonPrism) = BufferedPolygonPrism(t(g.p),t(g.origin),t(g.extremity))
         (t::$T)(::Nothing) = nothing
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
