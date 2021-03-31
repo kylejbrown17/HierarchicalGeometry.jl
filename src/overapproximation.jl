@@ -1,13 +1,6 @@
 
 abstract type OverapproxModel end
 
-# """
-#     LazySets.center(p::AbstractPolytope)
-
-# A hacky way of choosing a reasonable center for a polytope.
-# """
-# LazySets.center(p::AbstractPolytope) = LazySets.center(overapproximate(p))
-
 LazySets.ρ(d::AbstractVector,geom::AbstractVector{N}) where {N<:GeometryBasics.Ngon} = maximum(map(v->ρ(d,v),geom))
 
 export PolyhedronOverapprox
@@ -23,6 +16,114 @@ end
 get_support_vecs(model::PolyhedronOverapprox) = [v for v in model.support_vectors]
 make_polytope(m::PolyhedronOverapprox) = HPolytope(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
 make_polytope(m::PolyhedronOverapprox{2,N}) where {N} = HPolygon(map(v->LazySets.HalfSpace(v,1.0),get_support_vecs(m)))
+
+"""
+    BufferedPolygon
+
+A polygon constrained to not have any degenerate vertices
+"""
+struct BufferedPolygon
+    halfspaces::Vector{LazySets.HalfSpace}
+    pts::Vector{SVector{3,Float64}}
+    min_corner_depth::Float64 # minimum corner depth
+end
+struct BufferedPolygonPrism
+    p::BufferedPolygon
+    origin::SVector{3,Float64}
+    extremity::SVector{3,Float64}
+end
+function compute_buffered_polygon(vecs,buffer,points_and_radii,ϵ=0.0;
+        z::Float64=0.0,
+    )
+    N = length(vecs)
+    M = 3
+    # compute minimum halfspace values
+    hmin = -Inf*ones(N)
+    for (pt,r) in points_and_radii
+        for (i,vec) in enumerate(vecs)
+            hmin[i] = max(hmin[i], dot(pt,vec) + r + ϵ)
+        end
+    end
+    # compute minimum feasible h vals such that no corners are chopped off
+    model = Model(default_optimizer())
+    set_optimizer_attributes(model,default_optimizer_attributes()...)
+    @variable(model, h[1:N] >= 0)
+    @variable(model, pts[1:M,1:N])
+    for i in 1:N
+        @constraint(model,h[i] >= hmin[i])
+    end
+    for (i,j) in zip(
+        1:N,
+        Base.Iterators.drop(Base.Iterators.cycle(1:N),1),
+        )
+        @constraint(model,h[i] >= (h[j]+buffer)*dot(normalize(vecs[i]),normalize(vecs[j])))
+        @constraint(model,dot(pts[1:M,i],vecs[i]) - h[i] == 0) 
+        @constraint(model,dot(pts[1:M,i],vecs[j]) - h[j] == 0) 
+    end
+    @objective(model,Min,sum(h))
+    optimize!(model)
+    hvals = value.(h)
+    pt_vals = value.(pts)
+    BufferedPolygon(
+        map(i->LazySets.HalfSpace(SVector{M,Float64}(vecs[i]),hvals[i]),1:N),
+        map(i->SVector{M,Float64}(pt_vals[1:M,i]),1:N),
+        buffer
+    )
+end
+function compute_buffered_polygon_prism(vecs,buffer,points_and_radii,ϵ=0.0)
+    # assumes that vecs are in the X-Y plane
+    hlo = Inf
+    hhi = -Inf
+    for (x,r) in points_and_radii
+        hlo = min(x[3]-(r+ϵ),hlo)
+        hhi = max(x[3]+(r+ϵ),hhi)
+    end
+    origin = SVector{3,Float64}(0.0,0.0,hlo)
+    extremity = SVector{3,Float64}(0.0,0.0,hhi)
+    p = compute_buffered_polygon(vecs,buffer,points_and_radii,ϵ)
+    BufferedPolygonPrism(
+        BufferedPolygon(
+            p.halfspaces,
+            [pt .+ origin for pt in p.pts],
+            p.min_corner_depth),
+            origin,extremity)
+end
+function GeometryBasics.coordinates(p::BufferedPolygonPrism)
+    d = p.extremity - p.origin
+    [(Point{3,Float64}(pt[1],pt[2],pt[3]) for pt in p.p.pts)...,
+    (Point{3,Float64}(pt[1]+d[1],pt[2]+d[2],pt[3]+d[3]) for pt in p.p.pts)...]
+end
+function GeometryBasics.faces(p::BufferedPolygonPrism)
+    n = length(p.p.pts)
+    [
+        (NgonFace{4,Int}(i,i+1,i+n+1,i+n) for i in 1:n-1)...,
+        NgonFace{4,Int}(n,1,n+1,2n),
+        (NgonFace{4,Int}(1,i,i+1,i+2) for i in 1:n-2)...,
+        (NgonFace{4,Int}(1+n,i+n,i+1+n,i+2+n) for i in 1:n-1)...,
+    ]
+end
+
+function extract_points_and_radii(p::BufferedPolygonPrism)
+    d = norm(p.extremity - p.origin)
+    Base.Iterators.flatten(
+        [((SVector{3,Float64}(pt[1],pt[2],pt[3]),0.0) for pt in p.p.pts),
+        ((SVector{3,Float64}(pt[1]+d[1],pt[2]+d[2],pt[3]+d[3]),0.0) for pt in p.p.pts)],
+    )
+end
+
+function regular_buffered_polygon(n::Int,r::Float64,θ₀=0.0,buffer=0.0)
+    Δθ = 2π/n
+    rc = cos(Δθ/2)
+    hspaces = Vector{LazySets.HalfSpace}(undef,n)
+    pts = Vector{SVector{3,Float64}}(undef,n)
+    for i in 1:n
+        θ = θ₀ + (i-1)*Δθ
+        θp = θ + Δθ/2
+        hspaces[i]  = LazySets.HalfSpace(SVector{3,Float64}(cos(θ),sin(θ),0.0),rc)
+        pts[i]      = SVector{3,Float64}(r*cos(θp),r*sin(θp),0.0)
+    end
+    BufferedPolygon(hspaces,pts,buffer)
+end
 
 """
     PolyhedronOverapprox(dim::Int,N::Int,epsilon=0.1)
@@ -182,20 +283,23 @@ LazySets.dim(it::Base.Generator) = LazySets.dim(collect(Base.Iterators.take(it,1
 
 Base.convert(::Type{Ball2{T,V}},b::Ball2) where {T,V} = Ball2(V(b.center),T(b.radius))
 
+function overapproximate_sphere(points_and_radii,N=3,ϵ=0.0)
+    model = Model(default_optimizer())
+    set_optimizer_attributes(model,default_optimizer_attributes()...)
+    @variable(model,v[1:N])
+    @variable(model,d)
+    @objective(model,Min,d)
+    for (pt,r) in points_and_radii
+        @constraint(model,[(d-r-ϵ),map(i->(v[i]-pt[i]),1:N)...] in SecondOrderCone())
+    end
+    optimize!(model)
+    return Ball2(SVector{N,Float64}(value.(v)),value(d))
+end
+
 for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any)
     @eval begin
-        # function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(lazy_set)) where {H<:Ball2}
         function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0,N = LazySets.dim(H)) where {H<:Ball2}
-            model = Model(default_optimizer())
-            set_optimizer_attributes(model,default_optimizer_attributes()...)
-            @variable(model,v[1:N])
-            @variable(model,d)
-            @objective(model,Min,d)
-            for (pt,r) in extract_points_and_radii(lazy_set)
-                @constraint(model,[(d-r-ϵ),map(i->(v[i]-pt[i]),1:N)...] in SecondOrderCone())
-            end
-            optimize!(model)
-            return convert(H,Ball2(value.(v),value(d)))
+            return convert(H,overapproximate_sphere(extract_points_and_radii(lazy_set),N,ϵ))
         end
         function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0) where {A,V<:AbstractVector,H<:Hyperrectangle{A,V,V}}
             high = -Inf*ones(V)
@@ -207,6 +311,20 @@ for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any
             ctr = (high .+ low) / 2
             widths = (high .- low) / 2
             Hyperrectangle(ctr,widths .+ (ϵ / 2))
+        end
+        function LazySets.overapproximate(lazy_set::$T,m::BufferedPolygon,ϵ::Float64=0.0) where {A,V<:AbstractVector}
+            compute_buffered_polygon(
+                [h.a for h in m.halfspaces],
+                m.min_corner_depth,
+                extract_points_and_radii(lazy_set),
+                ϵ)
+        end
+        function LazySets.overapproximate(lazy_set::$T,m::BufferedPolygonPrism,ϵ::Float64=0.0) where {A,V<:AbstractVector}
+            compute_buffered_polygon_prism(
+                [h.a for h in m.p.halfspaces],
+                m.p.min_corner_depth,
+                extract_points_and_radii(lazy_set),
+                ϵ)
         end
     end
 end
@@ -329,7 +447,7 @@ function spaced_neighbors(polygon,n::Int,
     pts = vertices_list(polygon)
     @assert length(pts) >= n "length(pts) = $(length(pts)), but n = $n"
     if length(pts) == n
-        return collect(1:n)
+        return collect(1:n), 0.0
     end
     best_idxs = SVector{n,Int}(collect(1:n)...)
     d_hi = score_function(best_idxs)
@@ -388,7 +506,7 @@ function select_support_locations(polygon::LazySets.AbstractPolygon,r;
         score_function=score_function_constructor(pts,n)
         best_idxs, _ = spaced_neighbors(polygon,n,score_function)
         if length(best_idxs) < n
-            @warn "$n support points requested, but only $(length(best_idxs)) returned"
+            @warn "$n support points requested, but only $(length(best_idxs)) returned for polygon with $(length(pts)) vertices"
         end
         support_pts = pts[best_idxs]
     end
@@ -419,19 +537,19 @@ function select_num_robots(polygon,r)
         # Compute upper bound on the number of robots
         N = length(pts)
         n_max = min(N, Int(floor(p/(π*r)))) 
-        # for (i,pt1) in enumerate(pts)
-        #     j = i == length(pts) ? 1 : i + 1
-        #     pt2 = pts[j]
-        #     if norm(pt1-pt2) <= 2*r
-        #         n_max = n_max - 1
-        #     end
-        # end
         # @assert n_max >= 1 "N=$N, L=$L, W=$W, p=$p, n=$n, pts=$pts"
         n = min(n_max, 4) # try jumping up to 4
         # Now impose a lower bound based on sqrt(perimeter), so n will increase 
         # more slowly as p grows.
         n = min(n_max, Int(floor( 2*sqrt(p/(π*r)) )))
     end
+    # TRY THIS (and get rid of everything else above)
+    # x = p / (π * r)
+    # if W >= 2*r
+    #   n = Int(floor(max(1, min(length(pts), min(x, 2*sqrt(x))))))
+    # else # long and skinny
+    #   n = max(1, min(x, 2))
+    # end
     @info "" n
     return n
 end

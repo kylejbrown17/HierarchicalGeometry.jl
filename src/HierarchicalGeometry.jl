@@ -45,6 +45,7 @@ get_radius(s::Ball2) = s.radius
 get_center(s::HyperSphere) = s.center
 get_radius(s::HyperSphere) = s.r
 GeometryBasics.Sphere(s::Ball2) = GeometryBasics.Sphere(Point(s.center...),s.radius)
+Base.convert(::Type{S},s::Ball2) where {S<:GeometryBasics.HyperSphere} = S(Point(s.center...),s.radius)
 const RectType = Hyperrectangle
 get_center(s::Hyperrectangle) = s.center
 get_radius(s::Hyperrectangle) = s.radius
@@ -165,6 +166,8 @@ for T in (
         (t::$T)(g::HPolytope) = HPolytope(map(t, constraints_list(g)))
         (t::$T)(g::VPolygon) = VPolytope(map(t, vertices_list(g)))
         (t::$T)(g::HPolygon) = HPolytope(map(t, constraints_list(g)))
+        (t::$T)(g::BufferedPolygon) = BufferedPolygon(map(t,g.halfspaces),map(t,g.pts),g.min_corner_depth)
+        (t::$T)(g::BufferedPolygonPrism) = BufferedPolygonPrism(t(g.p),t(g.origin),t(g.extremity))
         (t::$T)(::Nothing) = nothing
         (t::$T)(g::Ball2) = Ball2(t(g.center),g.radius)
     end
@@ -1296,7 +1299,7 @@ project `p` onto line between `p1` and `p2`
 function project_point_to_line(p,p1,p2)
     base = p2-p1
     leg = p-p1
-    v = dot(leg,base) * base / norm(base)^2
+    v = p1 + dot(leg,base) * base / norm(base)^2
 end
 
 """
@@ -1304,7 +1307,7 @@ end
 
 Return true if `circle` intersect `line`.
 """
-function circle_intersects_line(circle,line)
+function circle_intersection_with_line(circle,line)
     p1,p2 = line.points[1], line.points[2]
     c = get_center(circle)
     pt = project_point_to_line(c,p1,p2)
@@ -1313,13 +1316,14 @@ function circle_intersects_line(circle,line)
     d2 = norm(p2-pt)
     r = get_radius(circle)
     if isapprox(d,d1+d2)
-        return r >= norm(c-pt)
+        return norm(c-pt) - r
     else
-        return r >= norm(c-p1) || r >= norm(c-p2)
+        return min(norm(c-p1),norm(c-p2)) - r
     end
 end
-circle_intersects_line(circle,pt1,pt2) = circle_intersects_line(circle,
-    GeometryBasics.Line(Point(pt1),Point(pt2)))
+circle_intersects_line(args...) = circle_intersection_with_line(args...) < 0
+circle_intersection_with_line(circle,pt1,pt2) = circle_intersection_with_line(circle,
+    GeometryBasics.Line(Point(pt1...),Point(pt2...)))
 
 """
     construct_visibility_graph(circles)
