@@ -27,6 +27,9 @@ function parallel_axis_3d(p,m)
     return m*(dot(p,p)*Id .- 2*p'*Id*p .+ m*p*p')
 end
 
+parallel_axis_1d(p::Real,m) = m*p^2
+parallel_axis_1d(p,m) = parallel_axis_1d(norm(p),m)
+
 """
     rotate_inertia(inertia,R)
 
@@ -51,29 +54,27 @@ end
 Computes the intertia of a triangular plate
 # p1-p2 is the longest leg
 """
-function inertia_of_triangular_plate(p1,p2,p3,ρ;
+function inertia_of_triangular_plate(pts,ρ;
         ifunc = inertia_of_right_triangle_about_base,
     )
     # integrate over all points
-    A = area([p1,p2,p3])                            # area
+    A = area(pts)                            # area
     m = ρ * A                                       # mass
-    com = (p1 .+ p2 .+ p3) / length(plate.points)   # center of mass
+    COM = sum(pts) / length(pts)   # center of mass
+    p1,p2,p3 = pts
     # begin by defining the base
     v12 = p2-p1 # x-axis : this is the longest side 
     v23 = p3-p2
     v13 = p3-p1
 
-    l12 = norm(v12) # b = base
-    l23 = norm(v23) # c = right side
-    l13 = norm(v13) # a = left side
-
-    h3 = project_onto_vector(v13,v12)
-    b1 = l12 - projection_norm(v13,v12)
-    b2 = l12 - b1
-
     x_vec = v12   # base vector
     y_vec = v13 - project_onto_vector(v13,v12) # height vector
     z_vec = cross(normalize(x_vec),normalize(y_vec)) # out of plane vector
+
+    Icxx = inertia_of_triangle_about_axis(pts,xvec,ρ,COM,m)
+    Icyy = inertia_of_triangle_about_axis(pts,yvec,ρ,COM,m)
+    Icxy = inertia_of_triangle_about_axis(pts,normalize(xvec .+ yvec),ρ,COM,m)
+    # Izz = 
 
     h = norm(y_vec) # base height
 
@@ -97,25 +98,33 @@ Compute inertia of triangle defined by pts about axis vec, with density ρ.
 """
 function inertia_of_triangle_about_axis(pts,vec,ρ,
         COM=sum(pts)/3,
-        A = GeometryBasics.area(pts),
-        m = ρ*A,
+        m = ρ*GeometryBasics.area(pts),
+        ;
+        about_com::Bool = true,
         )
     @assert isapprox(norm(vec),1.0)
     i = argmin(map(p->dot(p,cross(Point(0.0,0.0,1.0),vec)),pts))
     origin = pts[i]
-    @show pts_sorted = sort(pts,by=p->dot(vec,project_onto_vector(p,vec))) .- origin
+    com = COM-origin
+    pts_sorted = sort(pts,by=p->dot(vec,project_onto_vector(p,vec))) .- origin
     proj_vecs = map(p->project_onto_vector(p,vec),pts_sorted)
-    @show x = map(p->dot(p,vec),proj_vecs)
-    @show h = [norm(pt-p) for (pt,p) in zip(pts_sorted,proj_vecs)]
+    x = map(p->dot(p,vec),proj_vecs)
+    h = [norm(pt-p) for (pt,p) in zip(pts_sorted,proj_vecs)]
     # compute inertia of trapezoidal sections
-    @show I1 = inertia_of_vertical_trapezoid_about_base(h[1],h[2],x[2]-x[1],ρ)
-    @show I2 = inertia_of_vertical_trapezoid_about_base(h[1],h[3],x[3]-x[1],ρ)
-    @show I3 = inertia_of_vertical_trapezoid_about_base(h[2],h[3],x[3]-x[2],ρ)
+    I1 = inertia_of_vertical_trapezoid_about_base(h[1],h[2],x[2]-x[1],ρ)
+    I2 = inertia_of_vertical_trapezoid_about_base(h[1],h[3],x[3]-x[1],ρ)
+    I3 = inertia_of_vertical_trapezoid_about_base(h[2],h[3],x[3]-x[2],ρ)
     It = I2 - (I1 + I3)
-    if It < 0
-        return -It
+    # parallel axis adjustment
+    if about_com == true
+        Ipa = -parallel_axis_1d(com-project_onto_vector(com,vec),m)
+    else
+        Ipa = 0.0
     end
-    return It
+    if It < 0
+        return -It + Ipa
+    end
+    return It + Ipa
 end
 
 function inertia_of_vertical_trapezoid_about_base(h1,h2,d,ρ) 
@@ -126,5 +135,55 @@ function inertia_of_vertical_trapezoid_about_base(h1,h2,d,ρ)
     c = (h2-h1) / d
     (1/3)*ρ*( d*a^3 + (3/2)*c*(a*d)^2 + a*(c^2)*(d^3) + (1/4)*(c^3)*d^4 )
 end
+
+function inertia_of_right_triangle_out_of_plane_about_base(α,b,ρ)
+    Izz = ρ*((b^4)/24)*((3*sin(α)+sin(3*α))/(cos(α)^3))
+end
+
+"""
+    inertia_of_triangle_out_of_plane(pts,ρ,
+
+Returns centroidal moment of inertia.
+"""
+function inertia_of_triangle_out_of_plane(pts,ρ,
+        COM=sum(pts)/length(pts),
+        m=GeometryBasics.area(pts)*ρ,
+    )
+    # orient triangle
+    dists = [norm(pts[i]-pts[j]) for i in 1:3, j in 1:3]
+    idxs = sortperm([sum(dists,dims=1)...])
+    # idxs = [2,3,1]
+    @show A = pts[idxs[3]]
+    @show B = pts[idxs[2]]
+    @show C = pts[idxs[1]]
+    @show a = norm(B-C)
+    @show b = norm(A-C)
+    @show c = norm(A-B)
+
+    # inertia of first right triangle
+    @show α1 = find_angle(b,c,a) # law of cosines
+    @show b1 = c*cos(α1)
+    @show C1 = A .+ normalize(C-A)*b1
+    @show com1 = (A .+ B .+ C1) / 3
+    @show m1 = ρ*(1/2)*b1*c*sin(α1)
+    @show I1 = inertia_of_right_triangle_out_of_plane_about_base(α1,b1,ρ) - parallel_axis_1d(com1-A,m1)
+    # inertia of second right triangle
+    @show b2 = b - b1
+    @show α2 = atan(c*sin(α1),b2)
+    @show com2 = (C .+ B .+ C1) / 3
+    @show m2 = ρ*(1/2)*b2*b2*tan(α2)
+    @show I2 = inertia_of_right_triangle_out_of_plane_about_base(α2,b2,ρ) - parallel_axis_1d(com2-C,m2)
+    # combined inertia
+    @show com1-COM, com2-COM
+    I3 = I1 + parallel_axis_1d(com1-COM,m1) + I2 + parallel_axis_1d(com2-COM,m2)
+end
+
+"""
+    find_angle(a,b,c)
+
+Using the law of cosines, find angle at point C (opposite side c) from sides 
+a, b, and c. 
+"""
+find_angle(a,b,c) = acos(-(c^2 - (a^2 + b^2)) / (2*a*b))
 
 inertia_of_right_triangle_about_base(b,h,ρ) = ρ*(1/12)*b*h^3
