@@ -1303,6 +1303,20 @@ function project_point_to_line(p,p1,p2)
 end
 
 """
+    project_onto_vector(vec,b)
+
+project `vec` onto `b`.
+"""
+project_onto_vector(vec,b) = b*dot(vec,b)/dot(b,b)
+# project_onto_unit_vector(vec,b) = project_onto_vector(vec,normalize(b))
+
+"""
+"""
+projection_norm(a,b) = dot(a,b)/norm(b)
+
+include("dynamics.jl")
+
+"""
     circle_intersects_line(circle,line)
 
 Return true if `circle` intersect `line`.

@@ -594,3 +594,25 @@ function compute_hierarchical_2d_convex_hulls(scene_tree)
     end
     cvx_hulls
 end
+
+"""
+    mesh_solid_by_marching_cubes(geom,cube_size,dims)
+
+Compute a voxel-based approximation of `geom`'s volume, with voxels of size 
+`cube_size`.
+"""
+function mesh_solid_by_marching_cubes(f,cube_size,dims)
+    indicator_tensor = falses(dims)
+    explored = falses(dims)
+    hit_counts = zeros(Int,dims) # number of f == 1 along a path to a given voxel
+    frontier = Set{Tuple{NTuple{length(dims),Int}},Int}() # (idxs,hit_count)
+    push!(frontier,tuple(ones(length(dims))))
+    while length(frontier)
+        (idxs, hit_count) = pop!(frontier)
+        # check for intersection
+        if f(idxs,cube_size) > 0 # geometry intersected
+            # if intersected, are we leaving or entering?
+            hit_counts[idxs] = hit_counts[idxs]
+        end
+    end
+end
