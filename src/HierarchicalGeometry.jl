@@ -198,13 +198,14 @@ compute the relative transform `t` between two frames, `a`, and `b` such that
 
     i.e. (a ∘ t)(p) == a(t(p)) == b(p)
 """
-function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
-    t = inv(a) ∘ b
-    # pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
-    # rot_err = Rotations.rotation_error(a,b,error_map)
-    # q = UnitQuaternion(rot_err)
-    # t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
-end
+relative_transform(a::A,b::B) where {A<:CT.Transformation,B<:CT.Transformation} = inv(a) ∘ b
+# function relative_transform(a::CoordinateTransformations.AffineMap,b::CoordinateTransformations.AffineMap,error_map=MRPMap())
+#     t = inv(a) ∘ b
+#     # pos_err = CoordinateTransformations.Translation(b.translation - a.translation)
+#     # rot_err = Rotations.rotation_error(a,b,error_map)
+#     # q = UnitQuaternion(rot_err)
+#     # t = pos_err ∘ CoordinateTransformations.LinearMap(q) # IMPORTANT: rotation on right side
+# end
 function Rotations.rotation_error(
     a::CoordinateTransformations.AffineMap,
     b::CoordinateTransformations.AffineMap,
@@ -381,6 +382,7 @@ function GraphUtils.propagate_forward!(parent::TransformNode,child::TransformNod
     else
         set_global_transform!(child,global_transform(parent) ∘ local_transform(child))
     end
+    global_transform(child)
 end
 function set_local_transform!(n::TransformNode,t,update=false)
     n.local_transform = t ∘ identity_linear_map() # guarantee AffineMap?
@@ -394,6 +396,8 @@ function set_local_transform_in_global_frame!(n::TransformNode,t,args...)
     rot_mat = CT.LinearMap(global_transform(get_parent(n)).linear)
     set_local_transform!(n, inv(rot_mat) ∘ t )
 end
+
+export set_desired_global_transform!
 """
     set_desired_global_transform!(n::TransformNode,t,args...)
 
@@ -406,11 +410,29 @@ function set_desired_global_transform!(n::TransformNode,t,args...)
     else
         parent = get_parent(n)
         tform = relative_transform(global_transform(parent),t)
-        set_local_transform_in_global_frame!(n,tform)
+        set_local_transform!(n,tform)
     end
 end
 const transform_node_accessor_interface = [:tf_up_to_date,:local_transform,:global_transform]
 const transform_node_mutator_interface = [:set_tf_up_to_date!,:set_local_transform!,:set_global_transform!,:set_local_transform_in_global_frame!,:set_desired_global_transform!]
+
+export set_desired_global_transform_without_affecting_children!
+"""
+    set_desired_global_transform_without_affecting_children!()
+"""
+function set_desired_global_transform_without_affecting_children!(n::TransformNode,t,args...)
+    tf_dict = Dict{TransformNodeID,CT.AffineMap}()
+    child_dict = get_children(n)
+    for (id,c) in child_dict
+        tf_dict[id] = global_transform(c)
+    end
+    set_desired_global_transform!(n,t,args...)
+    for (id,tf) in tf_dict
+        set_desired_global_transform!(child_dict[id],tf)
+    end
+    global_transform(n)
+end
+
 """
     rem_parent!(child::TransformNode)
 
@@ -550,6 +572,7 @@ export
     HyperrectangleKey,
     HypersphereKey,
     CylinderKey,
+    OctagonalPrismKey,
     CircleKey
 
 abstract type GeometryKey end
@@ -566,6 +589,7 @@ Points to a polyhedron.
 """
 struct PolyhedronKey <: GeometryKey end
 struct PolygonKey <: GeometryKey end
+struct OctagonalPrismKey <: GeometryKey end
 """
     ZonotopeKey<: GeometryKey
 
@@ -584,6 +608,8 @@ construct_child_approximation(::HypersphereKey,geom,args...)    = LazySets.overa
 construct_child_approximation(::HyperrectangleKey,geom,args...) = LazySets.overapproximate(geom,Hyperrectangle{Float64,SVector{3,Float64},SVector{3,Float64}},args...)
 construct_child_approximation(::PolygonKey,geom,args...)        = LazySets.overapproximate(geom,ngon_overapprox_model(8),args...)
 construct_child_approximation(::CircleKey,geom,args...)         = LazySets.overapproximate(geom,Ball2{Float64,SVector{2,Float64}},args...)
+construct_child_approximation(::CylinderKey,geom,args...)       = LazySets.overapproximate(geom,Cylinder,args...)
+construct_child_approximation(::OctagonalPrismKey,geom,args...) = LazySets.overapproximate(geom,BufferedPolygonPrism(regular_buffered_polygon(8,1.0;buffer=0.05*default_robot_radius())),args...)
 
 """
     GeometryHierarchy

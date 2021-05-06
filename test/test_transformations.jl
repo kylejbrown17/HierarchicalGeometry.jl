@@ -192,6 +192,22 @@ let
 
     @test validate_tree(c)
 end
+# test set_desired_global_transform!(...)
+let 
+    a = TransformNode()
+    b = TransformNode()
+
+    set_parent!(b,a) # a is parent of b
+
+    set_local_transform!(a,CT.LinearMap(rand(RotMatrix{3,Float64})) ∘ CT.Translation(rand(3)))
+    set_local_transform!(b,CT.LinearMap(rand(RotMatrix{3,Float64})) ∘ CT.Translation(rand(3)))
+
+    HierarchicalGeometry.set_desired_global_transform!(b,global_transform(a))
+    t = relative_transform(a,b) # should be identity
+    @test isapprox(norm(t.linear .- one(SMatrix{3,3,Float64})), 0, atol=1e-10)
+    @test isapprox(norm(t.translation), 0, atol=1e-10)
+
+end
 # Test Transform Tree
 let
     a = TransformNode()
