@@ -1101,6 +1101,10 @@ end
 function is_within_capture_distance(t,t_des,ttol=capture_distance_tolerance(),rtol=capture_rotation_tolerance())
     et = norm(t.translation - t_des.translation) # translation error
     er = norm(Rotations.rotation_error(t,t_des)) # rotation_error
+    if isnan(er) || isinf(er)
+        @warn "Encountered singularity when computing rotation error. Defaulting to Frobenius norm of difference."
+        er = norm(t.linear .- t_des.linear)
+    end
     if et < ttol && er < rtol
         return true
     end
@@ -1263,8 +1267,26 @@ well as the maximum feasible speed of each object.
     vtx_ids             ::Vector{ID}             = Vector{ID}()
 end
 
+# active struct CollisionTableNode
+#   geom # get_cached_geom(geom)
+#   vmax # maximum speed
+#   
+
+# @with_kw struct CollisionTable <: AbstractCustomNGraph{Graph,CollisionStack{ID},ID}
+#     graph               ::Graph                 = Graph()
+#     nodes               ::Vector{CollisionStack{ID}} = Vector{CollisionStack{ID}}()
+#     vtx_map             ::Dict{ID,Int}           = Dict{ID,Int}()
+#     vtx_ids             ::Vector{ID}             = Vector{ID}()
+# end
+
 function get_transformed_config end
 function get_max_speed end
+
+# function min_time_to_collision(x1,x2,vmax1,vmax2)
+#     d_min = distance_lower_bound(x1,x2)
+#     v_max = vmax1 + vmax2
+#     dt = d_min / v_max
+# end
 
 """
     update_collision_table!(table,env_state,env,i,t=0)

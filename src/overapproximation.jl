@@ -348,8 +348,8 @@ function overapproximate_sphere(points_and_radii,N=3,ϵ=0.0)
         @constraint(model,[(d-r-ϵ),map(i->(v[i]-pt[i]),1:N)...] in SecondOrderCone())
     end
     if list_is_empty
-        return nothing
-        # return Ball2(SVector(zeros(N)...),0.0)
+        # return nothing
+        return Ball2(SVector(zeros(N)...),0.0)
     end
     optimize!(model)
     ball = Ball2(SVector{N,Float64}(value.(v)),max(0.0,value(d)))
@@ -374,27 +374,27 @@ function overapproximate_cylinder(points_and_radii,ϵ=0.0)
         Point(b.center[1],b.center[2],zhi),
         b.radius)
 end
-function overapproximate_hyperrectangle(points_and_radii,ϵ=0.0)
-    high = nothing
-    low = nothing
-    # high = -Inf*ones(V)
-    # low = Inf*ones(V)
-    for (pt,r) in points_and_radii
-        if high === nothing
-            high = pt .+ r
-            low = pt .- r
-        else
-            high = max.(high,pt .+ r)
-            low = min.(low,pt .- r)
-        end
-    end
-    if high === nothing
-        return nothing
-    end
-    ctr = (high .+ low) / 2
-    widths = (high .- low) / 2
-    Hyperrectangle(ctr,widths .+ (ϵ / 2))
-end
+# function overapproximate_hyperrectangle(points_and_radii,ϵ=0.0)
+#     high = nothing
+#     low = nothing
+#     # high = -Inf*ones(V)
+#     # low = Inf*ones(V)
+#     for (pt,r) in points_and_radii
+#         if high === nothing
+#             high = pt .+ r
+#             low = pt .- r
+#         else
+#             high = max.(high,pt .+ r)
+#             low = min.(low,pt .- r)
+#         end
+#     end
+#     if high === nothing
+#         return nothing
+#     end
+#     ctr = (high .+ low) / 2
+#     widths = (high .- low) / 2
+#     Hyperrectangle(ctr,widths .+ (ϵ / 2))
+# end
 
 
 for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any)
@@ -403,16 +403,20 @@ for T in (:AbstractPolytope,:LazySet,:AbstractVector,:(GeometryBasics.Ngon),:Any
             return convert(H,overapproximate_sphere(extract_points_and_radii(lazy_set),N,ϵ))
         end
         function LazySets.overapproximate(lazy_set::$T,::Type{H},ϵ::Float64=0.0) where {A,V<:AbstractVector,H<:Hyperrectangle{A,V,V}}
-            overapproximate_hyperrectangle(extract_points_and_radii(lazy_set),ϵ)
-            # high = -Inf*ones(V)
-            # low = Inf*ones(V)
-            # for (pt,r) in extract_points_and_radii(lazy_set)
-            #     high = max.(high,pt .+ r)
-            #     low = min.(low,pt .- r)
-            # end
-            # ctr = (high .+ low) / 2
-            # widths = (high .- low) / 2
-            # Hyperrectangle(ctr,widths .+ (ϵ / 2))
+            # overapproximate_hyperrectangle(extract_points_and_radii(lazy_set),ϵ)
+            high = -Inf*ones(V)
+            low = Inf*ones(V)
+            for (pt,r) in extract_points_and_radii(lazy_set)
+                high = max.(high,pt .+ r)
+                low = min.(low,pt .- r)
+            end
+            ctr = (high .+ low) / 2
+            widths = (high .- low) / 2
+            if any(widths .< 0)
+                ctr = zeros(V)
+                widths = zeros(V)
+            end
+            Hyperrectangle(ctr,widths .+ (ϵ / 2))
         end
         function LazySets.overapproximate(lazy_set::$T,m::Type{C},ϵ::Float64=0.0) where {C<:Cylinder}
             overapproximate_cylinder(extract_points_and_radii(lazy_set),ϵ)
